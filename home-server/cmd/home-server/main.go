@@ -50,7 +50,7 @@ func main() {
 		log.Fatalf("udp listen: %v", err)
 	}
 	defer udpConn.Close()
-	udp := newUDPService(udpConn, identity)
+	udp := newUDPService(udpConn, identity, *lanInterface)
 	go udp.readLoop()
 
 	for {

@@ -41,8 +41,17 @@ type Hello struct {
 }
 
 type Ready struct {
-	HomeDeviceID string `json:"home_device_id"`
-	LANCIDR      string `json:"lan_cidr,omitempty"`
+	HomeDeviceID string      `json:"home_device_id"`
+	LANCIDR      string      `json:"lan_cidr,omitempty"`
+	ClientHomeIP string      `json:"client_home_ip,omitempty"`
+	Devices      []DeviceMap `json:"devices,omitempty"`
+}
+
+type DeviceMap struct {
+	Name      string `json:"name,omitempty"`
+	RealIP    string `json:"real_ip"`
+	VirtualIP string `json:"virtual_ip"`
+	MAC       string `json:"mac,omitempty"`
 }
 
 type Frame struct {

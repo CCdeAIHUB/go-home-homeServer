@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"gohome/home-server/internal/lan"
 	"gohome/shared/protocol"
 	"gohome/shared/security"
 	"gohome/shared/tunnel"
@@ -17,6 +19,7 @@ import (
 type udpService struct {
 	conn     net.PacketConn
 	identity *security.Identity
+	iface    string
 
 	mu       sync.RWMutex
 	offers   map[string]protocol.HolePunchOffer
@@ -29,12 +32,20 @@ type udpSession struct {
 	key     []byte
 	peer    net.Addr
 	sendSeq uint64
+	link    packetLink
+	ready   []byte
 }
 
-func newUDPService(conn net.PacketConn, identity *security.Identity) *udpService {
+type packetLink interface {
+	WritePacket([]byte) error
+	Close() error
+}
+
+func newUDPService(conn net.PacketConn, identity *security.Identity, iface string) *udpService {
 	return &udpService{
 		conn:     conn,
 		identity: identity,
+		iface:    iface,
 		offers:   map[string]protocol.HolePunchOffer{},
 		sessions: map[string]*udpSession{},
 	}
@@ -109,6 +120,7 @@ func (s *udpService) handlePacket(packet []byte, addr net.Addr) error {
 func (s *udpService) handleHello(hello tunnel.Hello, addr net.Addr) error {
 	s.mu.RLock()
 	offer, ok := s.offers[hello.SessionID]
+	existing := s.sessions[hello.SessionID]
 	s.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("unknown punch session %s", hello.SessionID)
@@ -116,28 +128,82 @@ func (s *udpService) handleHello(hello tunnel.Hello, addr net.Addr) error {
 	if hello.ClientDeviceID != offer.Client.DeviceID {
 		return fmt.Errorf("client %s is not offered for session %s", hello.ClientDeviceID, hello.SessionID)
 	}
+	if existing != nil {
+		existing.mu.Lock()
+		existing.peer = addr
+		ready := append([]byte(nil), existing.ready...)
+		existing.mu.Unlock()
+		return s.sendFrame(existing, tunnel.FrameReady, ready)
+	}
 	key, err := s.identity.Decrypt(hello.EncryptedSessionKey)
 	if err != nil {
 		return fmt.Errorf("decrypt session key: %w", err)
 	}
-
-	session := &udpSession{offer: offer, key: key, peer: addr}
-	s.mu.Lock()
-	s.sessions[hello.SessionID] = session
-	s.mu.Unlock()
+	if offer.Request.VirtualCIDR != "" {
+		if err := lan.ValidateMappedCIDR(offer.Server.LANCIDR, offer.Request.VirtualCIDR); err != nil {
+			return err
+		}
+	}
+	homeLease := s.leaseClientIP(offer)
 
 	ready, err := json.Marshal(tunnel.Ready{
 		HomeDeviceID: offer.Server.DeviceID,
 		LANCIDR:      offer.Server.LANCIDR,
+		ClientHomeIP: homeLease.IP,
+		Devices:      lan.Discover(offer.Server.LANCIDR, offer.Request.VirtualCIDR),
 	})
 	if err != nil {
 		return err
 	}
+	session := &udpSession{offer: offer, key: key, peer: addr, ready: ready}
+	s.mu.Lock()
+	if current := s.sessions[hello.SessionID]; current != nil {
+		s.mu.Unlock()
+		current.mu.Lock()
+		current.peer = addr
+		replayedReady := append([]byte(nil), current.ready...)
+		current.mu.Unlock()
+		return s.sendFrame(current, tunnel.FrameReady, replayedReady)
+	}
+	s.sessions[hello.SessionID] = session
+	s.mu.Unlock()
+
 	if err := s.sendFrame(session, tunnel.FrameReady, ready); err != nil {
 		return err
 	}
+	if homeLease.IP != "" {
+		link, err := newHomeLink(hello.SessionID, homeLease.IP, func(packet []byte) error {
+			return s.sendFrame(session, tunnel.FrameIPv4, packet)
+		})
+		if err != nil {
+			log.Printf("home TUN path unavailable for session %s: %v", hello.SessionID, err)
+		} else {
+			session.link = link
+		}
+	}
 	log.Printf("UDP tunnel ready: session=%s client=%s peer=%s", hello.SessionID, hello.ClientDeviceID, addr.String())
 	return nil
+}
+
+func (s *udpService) leaseClientIP(offer protocol.HolePunchOffer) lan.Lease {
+	if offer.Request.ClientVirtualMAC == "" {
+		return lan.Lease{}
+	}
+	iface := s.iface
+	if iface == "" {
+		iface = lan.Detect().Interface
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	lease, err := lan.RequestLease(ctx, iface, offer.Request.ClientVirtualMAC)
+	if err != nil {
+		log.Printf("DHCP proxy lease unavailable for session %s: %v", offer.SessionID, err)
+		return lan.Lease{}
+	}
+	if err := lan.EnableProxyARP(ctx, iface, lease.IP); err != nil {
+		log.Printf("proxy ARP unavailable for session %s IP %s: %v", offer.SessionID, lease.IP, err)
+	}
+	return lease
 }
 
 func (s *udpService) handleFrame(packet []byte, addr net.Addr) error {
@@ -162,7 +228,13 @@ func (s *udpService) handleFrame(packet []byte, addr net.Addr) error {
 	switch frame.Type {
 	case tunnel.FramePing, tunnel.FrameKeepalive:
 		return s.sendFrame(session, tunnel.FramePong, frame.Payload)
-	case tunnel.FrameIPv4, tunnel.FrameEthernet:
+	case tunnel.FrameIPv4:
+		if session.link == nil {
+			log.Printf("received IPv4 tunnel payload without LAN path: session=%s bytes=%d", frame.SessionID, len(frame.Payload))
+			return nil
+		}
+		return session.link.WritePacket(frame.Payload)
+	case tunnel.FrameEthernet:
 		log.Printf("received tunnel payload: session=%s frame=%d bytes=%d", frame.SessionID, frame.Type, len(frame.Payload))
 		return nil
 	default:
