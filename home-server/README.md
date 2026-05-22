@@ -5,7 +5,8 @@
 - WebSocket 鉴权与重连。
 - LAN 网段自动检测与上报。
 - UDP 监听入口。
-- P2P 打洞信令事件接收。
+- P2P 打洞信令事件接收、UDP probe 与直连握手。
+- SM2 会话密钥解封与 SM4 加密隧道 ready/ping/pong 帧。
 
 启动：
 
@@ -26,5 +27,5 @@ go run ./cmd/home-server -server ws://49.232.155.3:8080/ws -auth-code GOHOME-CHA
 - DHCP 代申请。
 - ARP 代理。
 - LAN 扫描。
-- UDP 打洞策略。
-- SM4 隧道加密数据面。
+- UPnP、NAT-PMP、端口预测等扩展打洞策略。
+- DHCP/ARP 接入后的真实 LAN 数据转发。

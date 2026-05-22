@@ -9,6 +9,7 @@ Go Home 是一个坚持纯 P2P UDP 打洞的虚拟局域网组网工具。公网
 - `server`：公网服务器，Go + SQLite + WebSocket JSON-RPC。
 - `web-console`：服务器 Web 控制台，Vue3。
 - `home-server`：家庭服务器，Go 后端服务与 CLI。
+- `client-core`：客户端直连核心，负责 WebSocket 设备鉴权、P2P UDP 打洞握手和加密隧道保活。
 - `client-ui`：客户端共用内嵌 UI，Vue3 + JSAPI。
 - `client-pc`：PC 客户端壳规划，C# Chromium/WebView。
 - `client-ios`、`client-android`、`client-harmony`：移动端平台壳规划。

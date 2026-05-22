@@ -28,9 +28,14 @@ func main() {
 	lanCIDR := flag.String("lan-cidr", "", "home LAN CIDR override")
 	lanInterface := flag.String("lan-interface", "", "home LAN interface label override")
 	deviceIDFile := flag.String("device-id-file", defaultDeviceIDFile(), "device id persistence file")
+	identityFile := flag.String("identity-file", defaultIdentityFile(), "SM2 identity persistence file")
 	flag.Parse()
 
-	deviceID, err := loadOrCreateDeviceID(*deviceIDFile)
+	identity, err := security.LoadOrCreateIdentity(*identityFile)
+	if err != nil {
+		log.Fatalf("identity: %v", err)
+	}
+	deviceID, err := loadOrCreateDeviceID(*deviceIDFile, identity.DeviceID("home"))
 	if err != nil {
 		log.Fatalf("device id: %v", err)
 	}
@@ -45,17 +50,18 @@ func main() {
 		log.Fatalf("udp listen: %v", err)
 	}
 	defer udpConn.Close()
-	go udpReadLoop(udpConn)
+	udp := newUDPService(udpConn, identity)
+	go udp.readLoop()
 
 	for {
-		if err := run(context.Background(), *serverURL, loadedAuthCode, deviceID, *udpPort, *lanCIDR, *lanInterface); err != nil {
+		if err := run(context.Background(), *serverURL, loadedAuthCode, deviceID, identity.PublicPEM, *udpPort, *lanCIDR, *lanInterface, udp); err != nil {
 			log.Printf("connection ended: %v", err)
 		}
 		time.Sleep(3 * time.Second)
 	}
 }
 
-func run(ctx context.Context, serverURL, authCode, deviceID string, udpPort int, lanCIDR, lanInterface string) error {
+func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, udpPort int, lanCIDR, lanInterface string, udp *udpService) error {
 	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		return err
@@ -73,6 +79,7 @@ func run(ctx context.Context, serverURL, authCode, deviceID string, udpPort int,
 		DeviceID:   deviceID,
 		DeviceType: protocol.DeviceTypeHomeServer,
 		AuthCode:   authCode,
+		PublicKey:  publicKey,
 		TimeKey:    security.GenerateTimeKey(authCode, now),
 		Timestamp:  now.Unix(),
 		UDPPort:    udpPort,
@@ -98,7 +105,7 @@ func run(ctx context.Context, serverURL, authCode, deviceID string, udpPort int,
 				errs <- err
 				return
 			}
-			handleServerEvent(writeJSON, env)
+			handleServerEvent(writeJSON, udp, env)
 		}
 	}()
 
@@ -140,7 +147,7 @@ func reportLAN(writeJSON func(any) error, lanCIDR, lanInterface string) error {
 	return writeJSON(env)
 }
 
-func handleServerEvent(writeJSON func(any) error, env protocol.Envelope) {
+func handleServerEvent(writeJSON func(any) error, udp *udpService, env protocol.Envelope) {
 	switch env.Action {
 	case protocol.EventDeviceLatencyProbe:
 		var params struct {
@@ -164,6 +171,7 @@ func handleServerEvent(writeJSON func(any) error, env protocol.Envelope) {
 			log.Printf("bad hole punch offer: %v", err)
 			return
 		}
+		udp.acceptOffer(offer)
 		log.Printf("hole punch offer: client=%s endpoint=%s family=%d", offer.Client.DeviceID, offer.Client.Endpoint, offer.FamilyID)
 	case protocol.EventDeviceForceOffline:
 		log.Printf("force offline requested")
@@ -175,30 +183,14 @@ func handleServerEvent(writeJSON func(any) error, env protocol.Envelope) {
 	}
 }
 
-func udpReadLoop(conn net.PacketConn) {
-	buf := make([]byte, 2048)
-	for {
-		n, addr, err := conn.ReadFrom(buf)
-		if err != nil {
-			return
-		}
-		log.Printf("udp packet from %s len=%d", addr.String(), n)
-	}
-}
-
-func loadOrCreateDeviceID(path string) (string, error) {
+func loadOrCreateDeviceID(path, generated string) (string, error) {
 	if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
 		return string(b), nil
 	}
-	token, err := security.NewToken(16)
-	if err != nil {
-		return "", err
-	}
-	id := "home-" + token
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	return id, os.WriteFile(path, []byte(id), 0o600)
+	return generated, os.WriteFile(path, []byte(generated), 0o600)
 }
 
 func loadAuthCode(value, path string) (string, error) {
@@ -222,4 +214,12 @@ func defaultDeviceIDFile() string {
 		return ".go-home-home-server-id"
 	}
 	return filepath.Join(dir, "go-home", "home-server-id")
+}
+
+func defaultIdentityFile() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || dir == "" {
+		return ".go-home-home-server-sm2.pem"
+	}
+	return filepath.Join(dir, "go-home", "home-server-sm2.pem")
 }

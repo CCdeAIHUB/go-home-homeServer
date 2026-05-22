@@ -186,16 +186,19 @@ type HolePunchRequestParams struct {
 }
 
 type PeerCandidate struct {
-	DeviceID string `json:"device_id"`
-	Endpoint string `json:"endpoint"`
-	UDPPort  int    `json:"udp_port"`
-	LANCIDR  string `json:"lan_cidr,omitempty"`
+	DeviceID  string `json:"device_id"`
+	Endpoint  string `json:"endpoint"`
+	UDPPort   int    `json:"udp_port"`
+	LANCIDR   string `json:"lan_cidr,omitempty"`
+	PublicKey string `json:"public_key,omitempty"`
 }
 
 type HolePunchOffer struct {
-	FamilyID int64         `json:"family_id"`
-	Client   PeerCandidate `json:"client"`
-	Server   PeerCandidate `json:"server"`
+	SessionID string                 `json:"session_id"`
+	FamilyID  int64                  `json:"family_id"`
+	Request   HolePunchRequestParams `json:"request"`
+	Client    PeerCandidate          `json:"client"`
+	Server    PeerCandidate          `json:"server"`
 }
 
 type CandidateRelayParams struct {
