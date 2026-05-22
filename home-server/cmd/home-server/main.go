@@ -124,6 +124,9 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 			if err := writeJSON(ping); err != nil {
 				return err
 			}
+			if err := reportTraffic(writeJSON, udp.trafficDelta()); err != nil {
+				return err
+			}
 			_ = reportLAN(writeJSON, lanCIDR, lanInterface)
 		}
 	}
@@ -146,6 +149,31 @@ func reportLAN(writeJSON func(any) error, lanCIDR, lanInterface string) error {
 		return err
 	}
 	return writeJSON(env)
+}
+
+func reportTraffic(writeJSON func(any) error, delta trafficTotals) error {
+	for _, report := range []struct {
+		direction string
+		bytes     uint64
+	}{
+		{direction: "up", bytes: delta.Up},
+		{direction: "down", bytes: delta.Down},
+	} {
+		if report.bytes == 0 {
+			continue
+		}
+		env, err := protocol.Request(fmt.Sprintf("traffic-%s-%d", report.direction, time.Now().UnixNano()), protocol.ActionStatsTraffic, protocol.TrafficReportParams{
+			Direction: report.direction,
+			Bytes:     int64(report.bytes),
+		})
+		if err != nil {
+			return err
+		}
+		if err := writeJSON(env); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func handleServerEvent(writeJSON func(any) error, udp *udpService, env protocol.Envelope) {

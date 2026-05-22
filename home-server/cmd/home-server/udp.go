@@ -35,6 +35,14 @@ type udpSession struct {
 	replay  tunnel.ReplayWindow
 	link    packetLink
 	ready   []byte
+	up      uint64
+	down    uint64
+	report  trafficTotals
+}
+
+type trafficTotals struct {
+	Up   uint64
+	Down uint64
 }
 
 type packetLink interface {
@@ -235,6 +243,7 @@ func (s *udpService) handleFrame(packet []byte, addr net.Addr) error {
 		return fmt.Errorf("secure frame sequence %d was already seen", frame.Sequence)
 	}
 	session.peer = addr
+	session.down += uint64(len(packet))
 	session.mu.Unlock()
 
 	switch frame.Type {
@@ -273,7 +282,38 @@ func (s *udpService) sendFrame(session *udpSession, frameType byte, payload []by
 		return err
 	}
 	_, err = s.conn.WriteTo(packet, peer)
+	if err == nil {
+		session.mu.Lock()
+		session.up += uint64(len(packet))
+		session.mu.Unlock()
+	}
 	return err
+}
+
+func (s *udpService) trafficDelta() trafficTotals {
+	s.mu.RLock()
+	sessions := make([]*udpSession, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		sessions = append(sessions, session)
+	}
+	s.mu.RUnlock()
+
+	var delta trafficTotals
+	for _, session := range sessions {
+		session.mu.Lock()
+		delta.Up += counterDelta(session.up, session.report.Up)
+		delta.Down += counterDelta(session.down, session.report.Down)
+		session.report = trafficTotals{Up: session.up, Down: session.down}
+		session.mu.Unlock()
+	}
+	return delta
+}
+
+func counterDelta(current, previous uint64) uint64 {
+	if current < previous {
+		return current
+	}
+	return current - previous
 }
 
 func frameSessionID(packet []byte) (string, error) {
