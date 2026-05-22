@@ -116,9 +116,10 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 		case err := <-errs:
 			return err
 		case <-ticker.C:
-			ping, _ := protocol.Request(fmt.Sprintf("ping-%d", time.Now().Unix()), protocol.ActionPing, map[string]any{
-				"time_key":  security.GenerateTimeKey(authCode, time.Now()),
-				"timestamp": time.Now().Unix(),
+			now := time.Now()
+			ping, _ := protocol.Request(fmt.Sprintf("ping-%d", now.Unix()), protocol.ActionPing, protocol.HeartbeatParams{
+				TimeKey:   security.GenerateTimeKey(authCode, now),
+				Timestamp: now.Unix(),
 			})
 			if err := writeJSON(ping); err != nil {
 				return err

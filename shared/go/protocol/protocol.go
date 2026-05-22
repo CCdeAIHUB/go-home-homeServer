@@ -216,6 +216,11 @@ type LatencyPongParams struct {
 	ProbeID string `json:"probe_id"`
 }
 
+type HeartbeatParams struct {
+	TimeKey   string `json:"time_key"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 type LogEntry struct {
 	ID        int64     `json:"id"`
 	Level     string    `json:"level"`
