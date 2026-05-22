@@ -173,6 +173,13 @@ func (s *udpService) handleHello(hello tunnel.Hello, addr net.Addr) error {
 	}
 	if homeLease.IP != "" {
 		link, err := newHomeLink(hello.SessionID, homeLease.IP, func(packet []byte) error {
+			if offer.Request.VirtualCIDR != "" {
+				translated, err := lan.TranslateIPv4Subnet(packet, offer.Server.LANCIDR, offer.Request.VirtualCIDR)
+				if err != nil {
+					return err
+				}
+				packet = translated
+			}
 			return s.sendFrame(session, tunnel.FrameIPv4, packet)
 		})
 		if err != nil {
@@ -233,7 +240,14 @@ func (s *udpService) handleFrame(packet []byte, addr net.Addr) error {
 			log.Printf("received IPv4 tunnel payload without LAN path: session=%s bytes=%d", frame.SessionID, len(frame.Payload))
 			return nil
 		}
-		return session.link.WritePacket(frame.Payload)
+		packet := frame.Payload
+		if session.offer.Request.VirtualCIDR != "" {
+			packet, err = lan.TranslateIPv4Subnet(packet, session.offer.Request.VirtualCIDR, session.offer.Server.LANCIDR)
+			if err != nil {
+				return err
+			}
+		}
+		return session.link.WritePacket(packet)
 	case tunnel.FrameEthernet:
 		log.Printf("received tunnel payload: session=%s frame=%d bytes=%d", frame.SessionID, frame.Type, len(frame.Payload))
 		return nil
