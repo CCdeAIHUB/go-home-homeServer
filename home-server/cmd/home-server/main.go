@@ -1,3 +1,16 @@
+// Package main 是 Go Home 家庭服务器的入口程序。
+//
+// 家庭服务器运行在家庭局域网中，职责包括：
+//   - 连接公网服务器，上报家庭局域网网段信息
+//   - 响应 P2P 打洞请求，与客户端建立 UDP 加密隧道
+//   - 通过 DHCP 代理为客户端分配局域网 IP
+//   - 通过代理 ARP 让客户端 IP 在局域网中可达
+//   - 在虚拟网段和真实网段之间转换 IPv4 数据包
+//   - 通过 UPnP/NAT-PMP 自动映射 UDP 端口
+//
+// 启动方式：
+//
+//	go run ./cmd/home-server -server ws://YOUR_SERVER:8080/ws -auth-code YOUR_CODE
 package main
 
 import (
@@ -8,9 +21,11 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -61,14 +76,35 @@ func main() {
 		go portmap.MaintainUPnP(context.Background(), uint16(*udpPort), *lanInterface)
 	}
 
+	// 监听信号，优雅关闭
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		log.Printf("received signal %v, shutting down...", sig)
+		// 清理所有隧道会话（释放 DHCP 租约、移除 ProxyARP）
+		udp.closeAll()
+		cancel()
+		os.Exit(0)
+	}()
+
 	for {
-		if err := run(context.Background(), *serverURL, loadedAuthCode, deviceID, identity.PublicPEM, *udpPort, *lanCIDR, *lanInterface, udp); err != nil {
+		if err := run(ctx, *serverURL, loadedAuthCode, deviceID, identity.PublicPEM, *udpPort, *lanCIDR, *lanInterface, udp); err != nil {
 			log.Printf("connection ended: %v", err)
 		}
-		time.Sleep(3 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 
+// run 执行一次到公网服务器的连接生命周期：认证 → 心跳 → 断线。
+// 断线后由 main 循环重连。
 func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, udpPort int, lanCIDR, lanInterface string, udp *udpService) error {
 	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
@@ -82,6 +118,7 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 		return conn.WriteJSON(value)
 	}
 
+	// 发送设备认证请求
 	now := time.Now()
 	auth, err := protocol.Request("auth-1", protocol.ActionDeviceAuth, protocol.DeviceAuthParams{
 		DeviceID:   deviceID,
@@ -99,6 +136,7 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 		return err
 	}
 
+	// 上报初始 LAN 网段信息
 	if err := reportLAN(writeJSON, lanCIDR, lanInterface); err != nil {
 		log.Printf("initial lan report failed: %v", err)
 	}
@@ -106,6 +144,7 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	errs := make(chan error, 1)
+	// 读取服务器推送的事件
 	go func() {
 		for {
 			var env protocol.Envelope
@@ -117,6 +156,7 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 		}
 	}()
 
+	// 主循环：心跳 + 流量上报 + LAN 上报
 	for {
 		select {
 		case <-ctx.Done():
@@ -140,6 +180,7 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 	}
 }
 
+// reportLAN 向服务器上报家庭局域网网段信息。
 func reportLAN(writeJSON func(any) error, lanCIDR, lanInterface string) error {
 	info := lan.Detect()
 	if lanCIDR != "" {
@@ -159,6 +200,7 @@ func reportLAN(writeJSON func(any) error, lanCIDR, lanInterface string) error {
 	return writeJSON(env)
 }
 
+// reportTraffic 向服务器上报本周期流量统计。
 func reportTraffic(writeJSON func(any) error, delta trafficTotals) error {
 	for _, report := range []struct {
 		direction string
@@ -184,6 +226,7 @@ func reportTraffic(writeJSON func(any) error, delta trafficTotals) error {
 	return nil
 }
 
+// handleServerEvent 处理服务器推送的事件。
 func handleServerEvent(writeJSON func(any) error, udp *udpService, env protocol.Envelope) {
 	switch env.Action {
 	case protocol.EventDeviceLatencyProbe:
@@ -211,7 +254,8 @@ func handleServerEvent(writeJSON func(any) error, udp *udpService, env protocol.
 		udp.acceptOffer(offer)
 		log.Printf("hole punch offer: client=%s endpoint=%s family=%d", offer.Client.DeviceID, offer.Client.Endpoint, offer.FamilyID)
 	case protocol.EventDeviceForceOffline:
-		log.Printf("force offline requested")
+		log.Printf("force offline requested, shutting down")
+		udp.closeAll()
 		os.Exit(0)
 	default:
 		if env.Error != nil {
@@ -220,6 +264,7 @@ func handleServerEvent(writeJSON func(any) error, udp *udpService, env protocol.
 	}
 }
 
+// loadOrCreateDeviceID 加载或创建设备 ID 持久化文件。
 func loadOrCreateDeviceID(path, generated string) (string, error) {
 	if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
 		return string(b), nil
@@ -230,6 +275,7 @@ func loadOrCreateDeviceID(path, generated string) (string, error) {
 	return generated, os.WriteFile(path, []byte(generated), 0o600)
 }
 
+// loadAuthCode 从命令行参数或文件加载授权码。
 func loadAuthCode(value, path string) (string, error) {
 	if path == "" {
 		return value, nil
@@ -245,6 +291,7 @@ func loadAuthCode(value, path string) (string, error) {
 	return authCode, nil
 }
 
+// defaultDeviceIDFile 返回设备 ID 持久化文件的默认路径。
 func defaultDeviceIDFile() string {
 	dir, err := os.UserConfigDir()
 	if err != nil || dir == "" {
@@ -253,6 +300,7 @@ func defaultDeviceIDFile() string {
 	return filepath.Join(dir, "go-home", "home-server-id")
 }
 
+// defaultIdentityFile 返回 SM2 身份持久化文件的默认路径。
 func defaultIdentityFile() string {
 	dir, err := os.UserConfigDir()
 	if err != nil || dir == "" {
