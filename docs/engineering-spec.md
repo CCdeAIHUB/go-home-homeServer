@@ -217,3 +217,8 @@ WebSocket 断开后启动 30 秒宽限期：
 
 本地工作区可以继续保留单仓库开发形态。每次修改完成并通过基础校验后，使用 `scripts/publish-repos.ps1 -Push` 将对应内容拆分同步到三个远程仓库。GitHub Actions 在 push 后自动执行编译校验。
 
+客户端仓库当前 CI/CD 优先级：
+
+- Android：构建 Kotlin WebView 壳 APK，并上传到 Actions Artifacts。
+- Windows：发布 `win-x64` 客户端壳输出，并上传到 Actions Artifacts。
+- iOS、macOS、Linux、鸿蒙暂保留工程边界，不进入当前产物编译链路。

@@ -54,3 +54,10 @@ go run ./server/cmd/server
 ```
 
 脚本会在 `.publish` 目录中克隆三个仓库，按项目边界同步文件，提交并推送。远程仓库的 GitHub Actions 会在 push 后自动编译。
+
+客户端仓库当前优先发布 Android 与 Windows：
+
+- Android：Actions Artifact `go-home-android-debug-apk`
+- Windows：Actions Artifact `go-home-windows-win-x64`
+
+其他客户端平台目录保留，但暂不进入 Actions 编译产物链路。
