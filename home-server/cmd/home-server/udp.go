@@ -32,6 +32,7 @@ type udpSession struct {
 	key     []byte
 	peer    net.Addr
 	sendSeq uint64
+	replay  tunnel.ReplayWindow
 	link    packetLink
 	ready   []byte
 }
@@ -229,6 +230,10 @@ func (s *udpService) handleFrame(packet []byte, addr net.Addr) error {
 		return err
 	}
 	session.mu.Lock()
+	if !session.replay.Accept(frame.Sequence) {
+		session.mu.Unlock()
+		return fmt.Errorf("secure frame sequence %d was already seen", frame.Sequence)
+	}
 	session.peer = addr
 	session.mu.Unlock()
 
