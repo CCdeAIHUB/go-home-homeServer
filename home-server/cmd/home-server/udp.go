@@ -35,6 +35,7 @@ type udpSession struct {
 	replay  tunnel.ReplayWindow
 	link    packetLink
 	ready   []byte
+	seenAt  time.Time
 	up      uint64
 	down    uint64
 	report  trafficTotals
@@ -51,13 +52,15 @@ type packetLink interface {
 }
 
 func newUDPService(conn net.PacketConn, identity *security.Identity, iface string) *udpService {
-	return &udpService{
+	service := &udpService{
 		conn:     conn,
 		identity: identity,
 		iface:    iface,
 		offers:   map[string]protocol.HolePunchOffer{},
 		sessions: map[string]*udpSession{},
 	}
+	go service.reapLoop()
+	return service
 }
 
 func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
@@ -140,6 +143,7 @@ func (s *udpService) handleHello(hello tunnel.Hello, addr net.Addr) error {
 	if existing != nil {
 		existing.mu.Lock()
 		existing.peer = addr
+		existing.seenAt = time.Now()
 		ready := append([]byte(nil), existing.ready...)
 		existing.mu.Unlock()
 		return s.sendFrame(existing, tunnel.FrameReady, ready)
@@ -164,12 +168,13 @@ func (s *udpService) handleHello(hello tunnel.Hello, addr net.Addr) error {
 	if err != nil {
 		return err
 	}
-	session := &udpSession{offer: offer, key: key, peer: addr, ready: ready}
+	session := &udpSession{offer: offer, key: key, peer: addr, ready: ready, seenAt: time.Now()}
 	s.mu.Lock()
 	if current := s.sessions[hello.SessionID]; current != nil {
 		s.mu.Unlock()
 		current.mu.Lock()
 		current.peer = addr
+		current.seenAt = time.Now()
 		replayedReady := append([]byte(nil), current.ready...)
 		current.mu.Unlock()
 		return s.sendFrame(current, tunnel.FrameReady, replayedReady)
@@ -243,6 +248,7 @@ func (s *udpService) handleFrame(packet []byte, addr net.Addr) error {
 		return fmt.Errorf("secure frame sequence %d was already seen", frame.Sequence)
 	}
 	session.peer = addr
+	session.seenAt = time.Now()
 	session.down += uint64(len(packet))
 	session.mu.Unlock()
 
@@ -314,6 +320,41 @@ func counterDelta(current, previous uint64) uint64 {
 		return current
 	}
 	return current - previous
+}
+
+func (s *udpService) reapLoop() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for now := range ticker.C {
+		s.reapExpired(now)
+	}
+}
+
+func (s *udpService) reapExpired(now time.Time) {
+	const idleTimeout = 45 * time.Second
+	var expired []*udpSession
+	s.mu.Lock()
+	for sessionID, session := range s.sessions {
+		session.mu.Lock()
+		stale := now.Sub(session.seenAt) > idleTimeout
+		session.mu.Unlock()
+		if !stale {
+			continue
+		}
+		expired = append(expired, session)
+		delete(s.sessions, sessionID)
+		delete(s.offers, sessionID)
+	}
+	s.mu.Unlock()
+	for _, session := range expired {
+		session.mu.Lock()
+		link := session.link
+		session.link = nil
+		session.mu.Unlock()
+		if link != nil {
+			_ = link.Close()
+		}
+	}
 }
 
 func frameSessionID(packet []byte) (string, error) {
