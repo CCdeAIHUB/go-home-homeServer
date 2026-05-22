@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 func main() {
 	serverURL := flag.String("server", "ws://127.0.0.1:8080/ws", "public server websocket URL")
 	authCode := flag.String("auth-code", "GOHOME-CHANGE-ME", "server authorization code")
+	authCodeFile := flag.String("auth-code-file", "", "file containing server authorization code")
 	udpPort := flag.Int("udp-port", 47777, "local UDP port for P2P hole punching")
 	lanCIDR := flag.String("lan-cidr", "", "home LAN CIDR override")
 	lanInterface := flag.String("lan-interface", "", "home LAN interface label override")
@@ -31,6 +33,10 @@ func main() {
 	deviceID, err := loadOrCreateDeviceID(*deviceIDFile)
 	if err != nil {
 		log.Fatalf("device id: %v", err)
+	}
+	loadedAuthCode, err := loadAuthCode(*authCode, *authCodeFile)
+	if err != nil {
+		log.Fatalf("auth code: %v", err)
 	}
 	log.Printf("home-server device id: %s", deviceID)
 
@@ -42,7 +48,7 @@ func main() {
 	go udpReadLoop(udpConn)
 
 	for {
-		if err := run(context.Background(), *serverURL, *authCode, deviceID, *udpPort, *lanCIDR, *lanInterface); err != nil {
+		if err := run(context.Background(), *serverURL, loadedAuthCode, deviceID, *udpPort, *lanCIDR, *lanInterface); err != nil {
 			log.Printf("connection ended: %v", err)
 		}
 		time.Sleep(3 * time.Second)
@@ -193,6 +199,21 @@ func loadOrCreateDeviceID(path string) (string, error) {
 		return "", err
 	}
 	return id, os.WriteFile(path, []byte(id), 0o600)
+}
+
+func loadAuthCode(value, path string) (string, error) {
+	if path == "" {
+		return value, nil
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	authCode := strings.TrimSpace(string(b))
+	if authCode == "" {
+		return "", fmt.Errorf("auth code file is empty")
+	}
+	return authCode, nil
 }
 
 func defaultDeviceIDFile() string {

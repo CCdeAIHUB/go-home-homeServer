@@ -19,6 +19,8 @@ go run ./cmd/home-server -server ws://127.0.0.1:8080/ws -auth-code GOHOME-CHANGE
 go run ./cmd/home-server -server ws://49.232.155.3:8080/ws -auth-code GOHOME-CHANGE-ME -lan-cidr 192.168.3.0/24 -lan-interface br-lan
 ```
 
+在服务脚本中建议将授权码写入权限受限的文件，并使用 `-auth-code-file` 读取，避免把授权码暴露在进程参数里。
+
 后续需要在 `internal` 中继续实现：
 
 - DHCP 代申请。
