@@ -23,6 +23,8 @@ func main() {
 	serverURL := flag.String("server", "ws://127.0.0.1:8080/ws", "public server websocket URL")
 	authCode := flag.String("auth-code", "GOHOME-CHANGE-ME", "server authorization code")
 	udpPort := flag.Int("udp-port", 47777, "local UDP port for P2P hole punching")
+	lanCIDR := flag.String("lan-cidr", "", "home LAN CIDR override")
+	lanInterface := flag.String("lan-interface", "", "home LAN interface label override")
 	deviceIDFile := flag.String("device-id-file", defaultDeviceIDFile(), "device id persistence file")
 	flag.Parse()
 
@@ -40,14 +42,14 @@ func main() {
 	go udpReadLoop(udpConn)
 
 	for {
-		if err := run(context.Background(), *serverURL, *authCode, deviceID, *udpPort); err != nil {
+		if err := run(context.Background(), *serverURL, *authCode, deviceID, *udpPort, *lanCIDR, *lanInterface); err != nil {
 			log.Printf("connection ended: %v", err)
 		}
 		time.Sleep(3 * time.Second)
 	}
 }
 
-func run(ctx context.Context, serverURL, authCode, deviceID string, udpPort int) error {
+func run(ctx context.Context, serverURL, authCode, deviceID string, udpPort int, lanCIDR, lanInterface string) error {
 	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		return err
@@ -76,7 +78,7 @@ func run(ctx context.Context, serverURL, authCode, deviceID string, udpPort int)
 		return err
 	}
 
-	if err := reportLAN(writeJSON); err != nil {
+	if err := reportLAN(writeJSON, lanCIDR, lanInterface); err != nil {
 		log.Printf("initial lan report failed: %v", err)
 	}
 
@@ -108,13 +110,19 @@ func run(ctx context.Context, serverURL, authCode, deviceID string, udpPort int)
 			if err := writeJSON(ping); err != nil {
 				return err
 			}
-			_ = reportLAN(writeJSON)
+			_ = reportLAN(writeJSON, lanCIDR, lanInterface)
 		}
 	}
 }
 
-func reportLAN(writeJSON func(any) error) error {
+func reportLAN(writeJSON func(any) error, lanCIDR, lanInterface string) error {
 	info := lan.Detect()
+	if lanCIDR != "" {
+		info.CIDR = lanCIDR
+	}
+	if lanInterface != "" {
+		info.Interface = lanInterface
+	}
 	env, err := protocol.Request(fmt.Sprintf("lan-%d", time.Now().UnixNano()), protocol.ActionDeviceLANReport, protocol.LANReportParams{
 		LANCIDR:   info.CIDR,
 		Gateway:   info.Gateway,
