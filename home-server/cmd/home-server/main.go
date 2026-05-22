@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"gohome/home-server/internal/lan"
+	"gohome/home-server/internal/portmap"
 	"gohome/shared/protocol"
 	"gohome/shared/security"
 )
@@ -25,6 +26,7 @@ func main() {
 	authCode := flag.String("auth-code", "GOHOME-CHANGE-ME", "server authorization code")
 	authCodeFile := flag.String("auth-code-file", "", "file containing server authorization code")
 	udpPort := flag.Int("udp-port", 47777, "local UDP port for P2P hole punching")
+	enableUPnP := flag.Bool("upnp", true, "attempt same-port UPnP UDP mapping for the direct tunnel")
 	lanCIDR := flag.String("lan-cidr", "", "home LAN CIDR override")
 	lanInterface := flag.String("lan-interface", "", "home LAN interface label override")
 	deviceIDFile := flag.String("device-id-file", defaultDeviceIDFile(), "device id persistence file")
@@ -43,6 +45,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("auth code: %v", err)
 	}
+	if *udpPort < 1 || *udpPort > 65535 {
+		log.Fatalf("udp port must be between 1 and 65535")
+	}
 	log.Printf("home-server device id: %s", deviceID)
 
 	udpConn, err := net.ListenPacket("udp", fmt.Sprintf(":%d", *udpPort))
@@ -52,6 +57,9 @@ func main() {
 	defer udpConn.Close()
 	udp := newUDPService(udpConn, identity, *lanInterface)
 	go udp.readLoop()
+	if *enableUPnP {
+		go portmap.MaintainUPnP(context.Background(), uint16(*udpPort), *lanInterface)
+	}
 
 	for {
 		if err := run(context.Background(), *serverURL, loadedAuthCode, deviceID, identity.PublicPEM, *udpPort, *lanCIDR, *lanInterface, udp); err != nil {
