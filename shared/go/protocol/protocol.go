@@ -76,6 +76,22 @@ const (
 	ActionFrontConfigUpdatePass = "front.config.update_password"
 	// ActionFrontLogList 获取服务器日志，参数 LogListParams，返回 []LogEntry。
 	ActionFrontLogList = "front.log.list"
+	// ActionFrontFamilyDetail 获取家庭详情（含授权设备列表和流量统计），参数 FamilyDetailParams，返回 FamilyDetail。
+	ActionFrontFamilyDetail = "front.family.detail"
+	// ActionFrontFamilyTraffic 获取家庭流量统计，参数 FamilyDetailParams，返回 TrafficStats。
+	ActionFrontFamilyTraffic = "front.family.traffic"
+	// ActionFrontFamilyBlacklist 将设备加入家庭黑名单（永久禁止加入），参数 FamilyBlacklistParams，返回 {ok}。
+	ActionFrontFamilyBlacklist = "front.family.blacklist"
+	// ActionFrontFamilyUnblacklist 将设备移出家庭黑名单，参数 FamilyBlacklistParams，返回 {ok}。
+	ActionFrontFamilyUnblacklist = "front.family.unblacklist"
+	// ActionFrontDeviceDetail 获取设备详情（含流量统计和所属家庭），参数 DeviceDetailParams，返回 DeviceDetail。
+	ActionFrontDeviceDetail = "front.device.detail"
+	// ActionFrontDeviceTraffic 获取设备流量统计，参数 DeviceDetailParams，返回 TrafficStats。
+	ActionFrontDeviceTraffic = "front.device.traffic"
+	// ActionFrontDeviceSetNote 设置设备备注，参数 DeviceNoteParams，返回 {ok}。
+	ActionFrontDeviceSetNote = "front.device.set_note"
+	// ActionFrontDeviceGrantFamily 将客户端加入指定私密家庭，参数 FamilyGrantParams，返回 {ok}。
+	ActionFrontDeviceGrantFamily = "front.device.grant_family"
 )
 
 // device.* / client.* / p2p.* — 设备端操作。
@@ -299,6 +315,10 @@ type Device struct {
 	Online bool `json:"online"`
 	// LatencyMS 设备延迟（毫秒，运行时计算）。
 	LatencyMS int64 `json:"latency_ms,omitempty"`
+	// Note 设备注备（管理员可设置）。
+	Note string `json:"note,omitempty"`
+	// WSEndpoint WebSocket 连接端点地址。
+	WSEndpoint string `json:"ws_endpoint,omitempty"`
 }
 
 // CreateFamilyParams 是 front.family.create 的请求参数。
@@ -475,4 +495,64 @@ type Dashboard struct {
 	TotalBytes int64 `json:"total_bytes"`
 	// UptimeSeconds 服务器运行时长（秒）。
 	UptimeSeconds int64 `json:"uptime_seconds"`
+}
+
+// FamilyDetailParams 是 front.family.detail 和 front.family.traffic 的请求参数。
+type FamilyDetailParams struct {
+	// FamilyID 家庭 ID。
+	FamilyID int64 `json:"family_id"`
+}
+
+// FamilyBlacklistParams 是 front.family.blacklist 和 front.family.unblacklist 的请求参数。
+type FamilyBlacklistParams struct {
+	// FamilyID 家庭 ID。
+	FamilyID int64 `json:"family_id"`
+	// DeviceID 要加入黑名单的设备 ID。
+	DeviceID string `json:"device_id"`
+}
+
+// DeviceDetailParams 是 front.device.detail 和 front.device.traffic 的请求参数。
+type DeviceDetailParams struct {
+	// DeviceID 设备 ID。
+	DeviceID string `json:"device_id"`
+}
+
+// DeviceNoteParams 是 front.device.set_note 的请求参数。
+type DeviceNoteParams struct {
+	// DeviceID 设备 ID。
+	DeviceID string `json:"device_id"`
+	// Note 备注内容。
+	Note string `json:"note"`
+}
+
+// FamilyDetail 是 front.family.detail 的成功响应。
+type FamilyDetail struct {
+	// Family 家庭基本信息。
+	Family Family `json:"family"`
+	// Devices 已授权设备列表（含家庭服务器和客户端）。
+	Devices []Device `json:"devices"`
+	// Traffic 流量统计。
+	Traffic TrafficStats `json:"traffic"`
+	// BlacklistedDevices 被加入黑名单的设备 ID 列表。
+	BlacklistedDevices []string `json:"blacklisted_devices"`
+}
+
+// DeviceDetail 是 front.device.detail 的成功响应。
+type DeviceDetail struct {
+	// Device 设备基本信息。
+	Device Device `json:"device"`
+	// Families 设备所属/被授权的家庭列表。
+	Families []Family `json:"families"`
+	// Traffic 流量统计。
+	Traffic TrafficStats `json:"traffic"`
+	// Note 设备注备。
+	Note string `json:"note"`
+}
+
+// TrafficStats 表示流量统计。
+type TrafficStats struct {
+	// UpBytes 上行流量字节数。
+	UpBytes int64 `json:"up_bytes"`
+	// DownBytes 下行流量字节数。
+	DownBytes int64 `json:"down_bytes"`
 }
