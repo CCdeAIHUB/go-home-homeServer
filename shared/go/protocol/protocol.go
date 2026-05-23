@@ -164,6 +164,7 @@ type Envelope struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 	Result  any             `json:"result,omitempty"`
 	Error   *RPCError       `json:"error,omitempty"`
+	Token   string          `json:"token,omitempty"`
 }
 
 // RPCError 是 JSON-RPC 2.0 错误响应的结构。
