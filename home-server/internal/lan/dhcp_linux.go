@@ -23,34 +23,39 @@ type Lease struct {
 	DNS []string
 	// ExpiresAt 租约过期时间。
 	ExpiresAt time.Time
-	// release 内部 DHCP 租约对象，用于释放。
-	release *nclient4.Lease
+	// client 内部 DHCP 客户端，用于释放租约。
+	client *nclient4.Client
+	// lease 内部 DHCP 租约对象，用于释放。
+	lease *nclient4.Lease
 }
 
 // Release 释放 DHCP 租约，将 IP 归还给路由器。
 // 应在隧道会话结束时调用，避免 IP 地址在路由器上一直占用到租期自然过期。
-func (l Lease) Release() {
-	if l.release == nil {
+// 注意：必须在 Linux 平台上调用，需要通过 nclient4.Client.Release() 方法释放。
+func (l *Lease) Release() {
+	if l.client == nil || l.lease == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := l.release.Release(ctx); err != nil {
+	if err := l.client.Release(l.lease); err != nil {
 		// 释放失败不影响主流程，仅记录日志
 		fmt.Printf("DHCP lease release failed for %s: %v\n", l.IP, err)
 	}
+	l.client.Close()
+	l.client = nil
+	l.lease = nil
 }
 
 // RequestLease 通过 DHCP 协议向局域网路由器申请 IP 租约。
 // iface 为局域网网卡名称，mac 为客户端虚拟 MAC 地址。
 // 超时 5 秒，最多重试 2 次。
-func RequestLease(ctx context.Context, iface, mac string) (Lease, error) {
+// 返回的 Lease 可通过 Release() 方法释放，将 IP 归还给路由器。
+func RequestLease(ctx context.Context, iface, mac string) (*Lease, error) {
 	if iface == "" {
-		return Lease{}, fmt.Errorf("LAN interface is required for DHCP proxy lease")
+		return nil, fmt.Errorf("LAN interface is required for DHCP proxy lease")
 	}
 	hardwareAddr, err := net.ParseMAC(mac)
 	if err != nil {
-		return Lease{}, fmt.Errorf("invalid client virtual MAC: %w", err)
+		return nil, fmt.Errorf("invalid client virtual MAC: %w", err)
 	}
 	client, err := nclient4.New(
 		iface,
@@ -59,20 +64,21 @@ func RequestLease(ctx context.Context, iface, mac string) (Lease, error) {
 		nclient4.WithRetry(2),
 	)
 	if err != nil {
-		return Lease{}, err
+		return nil, err
 	}
-	defer client.Close()
 
 	lease, err := client.Request(ctx)
 	if err != nil {
-		return Lease{}, err
+		client.Close()
+		return nil, err
 	}
 	ack := lease.ACK
-	result := Lease{
+	result := &Lease{
 		IP:        ack.YourIPAddr.String(),
 		Netmask:   net.IP(ack.SubnetMask()).String(),
 		ExpiresAt: lease.CreationTime.Add(ack.IPAddressLeaseTime(time.Hour)),
-		release:   lease,
+		client:    client,
+		lease:     lease,
 	}
 	if routers := ack.Router(); len(routers) > 0 {
 		result.Gateway = routers[0].String()

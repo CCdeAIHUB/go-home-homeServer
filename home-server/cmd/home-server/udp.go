@@ -64,7 +64,7 @@ type udpSession struct {
 	// report 上次上报时的流量快照，用于计算增量。
 	report trafficTotals
 	// lease DHCP 租约信息，用于会话结束时释放。
-	lease lan.Lease
+	lease *lan.Lease
 }
 
 // trafficTotals 记录上行和下行流量字节数。
@@ -269,9 +269,10 @@ func (s *udpService) handleHello(hello tunnel.Hello, addr net.Addr) error {
 }
 
 // leaseClientIP 通过 DHCP 代理为客户端分配局域网 IP，并启用代理 ARP。
-func (s *udpService) leaseClientIP(offer protocol.HolePunchOffer) lan.Lease {
+// 返回的 *Lease 可通过 Release() 方法释放租约。
+func (s *udpService) leaseClientIP(offer protocol.HolePunchOffer) *lan.Lease {
 	if offer.Request.ClientVirtualMAC == "" {
-		return lan.Lease{}
+		return nil
 	}
 	iface := s.iface
 	if iface == "" {
@@ -282,7 +283,7 @@ func (s *udpService) leaseClientIP(offer protocol.HolePunchOffer) lan.Lease {
 	lease, err := lan.RequestLease(ctx, iface, offer.Request.ClientVirtualMAC)
 	if err != nil {
 		log.Printf("DHCP proxy lease unavailable for session %s: %v", offer.SessionID, err)
-		return lan.Lease{}
+		return nil
 	}
 	if err := lan.EnableProxyARP(ctx, iface, lease.IP); err != nil {
 		log.Printf("proxy ARP unavailable for session %s IP %s: %v", offer.SessionID, lease.IP, err)
@@ -438,7 +439,7 @@ func (s *udpService) cleanupSession(session *udpSession) {
 		_ = link.Close()
 	}
 	// 移除 ProxyARP 条目
-	if lease.IP != "" {
+	if lease != nil && lease.IP != "" {
 		iface := s.iface
 		if iface == "" {
 			iface = lan.Detect().Interface
@@ -450,7 +451,7 @@ func (s *udpService) cleanupSession(session *udpSession) {
 		cancel()
 	}
 	// 释放 DHCP 租约
-	if lease.IP != "" {
+	if lease != nil {
 		lease.Release()
 	}
 	log.Printf("session expired and cleaned up: session=%s client=%s", offer.SessionID, offer.Client.DeviceID)
