@@ -146,6 +146,9 @@ const (
 	// EventFamilyLANChanged 家庭局域网网段变化通知，参数 {family_id, lan_cidr}。
 	// 家庭服务器上报网段变化后，服务器通知所有有权限的客户端。
 	EventFamilyLANChanged = "family.lan_changed"
+	// EventFamilyHomeServerChanged 家庭服务器状态变更通知，参数 {family_id, home_server_id, online}。
+	// 家庭服务器上线或离线时，服务器通知所有有权限的客户端刷新家庭列表。
+	EventFamilyHomeServerChanged = "family.home_server_changed"
 )
 
 // ============================================================
@@ -404,6 +407,8 @@ type PeerCandidate struct {
 	ObservedEndpoint string `json:"observed_endpoint,omitempty"`
 	// UDPPort 对端监听的 UDP 端口。
 	UDPPort int `json:"udp_port"`
+	// RemoteAddr WebSocket 连接的源地址（host:port），用于多路径打洞候选。
+	RemoteAddr string `json:"remote_addr,omitempty"`
 	// LANCIDR 对端所在局域网的 CIDR（仅家庭服务器有值）。
 	LANCIDR string `json:"lan_cidr,omitempty"`
 	// PublicKey 对端的 SM2 公钥（PEM 格式），用于加密会话密钥交换。

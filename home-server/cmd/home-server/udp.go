@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -101,11 +102,45 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 	s.offers[offer.SessionID] = offer
 	s.mu.Unlock()
 
-	addr, err := net.ResolveUDPAddr("udp", offer.Client.Endpoint)
+	// 优先使用服务器观察到的 NAT 映射端点
+	endpoint := offer.Client.Endpoint
+	if offer.Client.ObservedEndpoint != "" {
+		endpoint = offer.Client.ObservedEndpoint
+	}
+	addr, err := net.ResolveUDPAddr("udp", endpoint)
 	if err != nil {
 		log.Printf("resolve client endpoint for session %s: %v", offer.SessionID, err)
 		return
 	}
+
+	// 收集候选端点（observed + reported），用于多路径打洞
+	candidates := []*net.UDPAddr{addr}
+	if offer.Client.ObservedEndpoint != "" && offer.Client.Endpoint != "" && offer.Client.ObservedEndpoint != offer.Client.Endpoint {
+		if alt, err := net.ResolveUDPAddr("udp", offer.Client.Endpoint); err == nil {
+			candidates = append(candidates, alt)
+		}
+	}
+	// 使用 WebSocket 源地址 IP + 报告的 UDP 端口作为额外候选
+	if offer.Client.RemoteAddr != "" && offer.Client.UDPPort > 0 {
+		host, _, splitErr := net.SplitHostPort(offer.Client.RemoteAddr)
+		if splitErr == nil {
+			remoteUDP := net.JoinHostPort(host, strconv.Itoa(offer.Client.UDPPort))
+			dup := false
+			for _, c := range candidates {
+				if c.String() == remoteUDP {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				if alt, err := net.ResolveUDPAddr("udp", remoteUDP); err == nil {
+					candidates = append(candidates, alt)
+				}
+			}
+		}
+	}
+	log.Printf("UDP probe candidates for session %s: %v", offer.SessionID, candidates)
+
 	packet, err := tunnel.MarshalProbe(tunnel.Probe{
 		SessionID: offer.SessionID,
 		DeviceID:  offer.Server.DeviceID,
@@ -117,10 +152,13 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 	}
 
 	go func() {
-		for attempt := 0; attempt < 5; attempt++ {
-			if _, err := s.conn.WriteTo(packet, addr); err != nil {
-				log.Printf("send UDP probe for session %s: %v", offer.SessionID, err)
-				return
+		for attempt := 0; attempt < 8; attempt++ {
+			// 向所有候选端点发送探测包
+			for _, candidate := range candidates {
+				if _, err := s.conn.WriteTo(packet, candidate); err != nil {
+					log.Printf("send UDP probe for session %s to %s: %v", offer.SessionID, candidate, err)
+					return
+				}
 			}
 			time.Sleep(time.Duration(attempt+1) * 120 * time.Millisecond)
 		}
