@@ -333,7 +333,10 @@ func defaultIdentityFile() string {
 // 让服务器发现本设备 NAT 映射后的公网端点。
 func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPort int, deviceID, token string, udpConn net.PacketConn) {
 	// 从 WebSocket URL 解析服务器主机名
-	parsed, err := url.Parse(strings.Replace(serverURL, "ws://", "http://", 1))
+	wsURL := serverURL
+	wsURL = strings.Replace(wsURL, "wss://", "https://", 1)
+	wsURL = strings.Replace(wsURL, "ws://", "http://", 1)
+	parsed, err := url.Parse(wsURL)
 	if err != nil {
 		log.Printf("parse server URL for UDP: %v", err)
 		return
