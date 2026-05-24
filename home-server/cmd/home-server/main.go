@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -34,6 +35,7 @@ import (
 	"gohome/home-server/internal/portmap"
 	"gohome/shared/protocol"
 	"gohome/shared/security"
+	"gohome/shared/tunnel"
 )
 
 func main() {
@@ -92,7 +94,7 @@ func main() {
 	}()
 
 	for {
-		if err := run(ctx, *serverURL, loadedAuthCode, deviceID, identity.PublicPEM, *udpPort, *lanCIDR, *lanInterface, udp); err != nil {
+		if err := run(ctx, *serverURL, loadedAuthCode, deviceID, identity.PublicPEM, *udpPort, *lanCIDR, *lanInterface, udp, udpConn); err != nil {
 			log.Printf("connection ended: %v", err)
 		}
 		select {
@@ -105,7 +107,7 @@ func main() {
 
 // run 执行一次到公网服务器的连接生命周期：认证 → 心跳 → 断线。
 // 断线后由 main 循环重连。
-func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, udpPort int, lanCIDR, lanInterface string, udp *udpService) error {
+func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, udpPort int, lanCIDR, lanInterface string, udp *udpService, udpConn net.PacketConn) error {
 	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		return err
@@ -136,9 +138,27 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 		return err
 	}
 
+	// 读取认证响应，获取 server_udp_port
+	var authResp protocol.Envelope
+	if err := conn.ReadJSON(&authResp); err != nil {
+		return fmt.Errorf("read auth response: %w", err)
+	}
+	var authResult protocol.DeviceAuthResult
+	if raw, err := json.Marshal(authResp.Result); err == nil {
+		_ = json.Unmarshal(raw, &authResult)
+	}
+	if authResp.Error != nil {
+		return fmt.Errorf("auth failed: %s", authResp.Error.Message)
+	}
+
 	// 上报初始 LAN 网段信息
 	if err := reportLAN(writeJSON, lanCIDR, lanInterface); err != nil {
 		log.Printf("initial lan report failed: %v", err)
+	}
+
+	// 启动 UDP 注册探测（NAT 端点发现）
+	if authResult.ServerUDPPort > 0 {
+		go registerUDPLoop(ctx, serverURL, authResult.ServerUDPPort, deviceID, authResult.Token, udpConn)
 	}
 
 	ticker := time.NewTicker(30 * time.Second)
@@ -307,4 +327,49 @@ func defaultIdentityFile() string {
 		return ".go-home-home-server-sm2.pem"
 	}
 	return filepath.Join(dir, "go-home", "home-server-sm2.pem")
+}
+
+// registerUDPLoop 定期向公网服务器发送 UDP 注册探测包，
+// 让服务器发现本设备 NAT 映射后的公网端点。
+func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPort int, deviceID, token string, udpConn net.PacketConn) {
+	// 从 WebSocket URL 解析服务器主机名
+	parsed, err := url.Parse(strings.Replace(serverURL, "ws://", "http://", 1))
+	if err != nil {
+		log.Printf("parse server URL for UDP: %v", err)
+		return
+	}
+	host := parsed.Hostname()
+	serverAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, fmt.Sprintf("%d", serverUDPPort)))
+	if err != nil {
+		log.Printf("resolve server UDP address: %v", err)
+		return
+	}
+
+	packet, err := tunnel.MarshalRegister(tunnel.Register{
+		DeviceID: deviceID,
+		Token:    token,
+	})
+	if err != nil {
+		log.Printf("marshal register packet: %v", err)
+		return
+	}
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	// 立即发送一次
+	if _, err := udpConn.WriteTo(packet, serverAddr); err != nil {
+		log.Printf("send UDP register: %v", err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := udpConn.WriteTo(packet, serverAddr); err != nil {
+				log.Printf("send UDP register: %v", err)
+			}
+		}
+	}
 }

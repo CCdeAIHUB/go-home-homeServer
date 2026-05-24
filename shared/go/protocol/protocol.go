@@ -259,6 +259,9 @@ type DeviceAuthResult struct {
 	DeviceID string `json:"device_id"`
 	// DeviceType 回显设备类型。
 	DeviceType string `json:"device_type"`
+	// ServerUDPPort 公网服务器的 UDP 监听端口，设备应向此端口发送 UDP 注册探测包
+	// 以便服务器发现 NAT 映射后的公网端点。0 表示服务器未启用 UDP 监听。
+	ServerUDPPort int `json:"server_udp_port,omitempty"`
 }
 
 // LANReportParams 是 device.lan.report 的请求参数。
@@ -396,6 +399,9 @@ type PeerCandidate struct {
 	DeviceID string `json:"device_id"`
 	// Endpoint 对端的公网地址（host:port 格式）。
 	Endpoint string `json:"endpoint"`
+	// ObservedEndpoint 服务器观察到的 NAT 映射后公网端点（host:port 格式）。
+	// 通过 UDP 注册探测发现，比 Endpoint 更准确。优先使用此字段。
+	ObservedEndpoint string `json:"observed_endpoint,omitempty"`
 	// UDPPort 对端监听的 UDP 端口。
 	UDPPort int `json:"udp_port"`
 	// LANCIDR 对端所在局域网的 CIDR（仅家庭服务器有值）。

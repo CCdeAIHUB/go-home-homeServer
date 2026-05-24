@@ -39,6 +39,9 @@ const (
 	PacketHello byte = 2
 	// PacketFrame 加密帧，所有隧道数据（IPv4 包、保活、ping/pong）都封装在此类型中。
 	PacketFrame byte = 3
+	// PacketRegister 注册探测包，设备发送到公网服务器以发现 NAT 映射后的公网端点。
+	// 服务器收到后记录源地址作为该设备的 observed_endpoint。
+	PacketRegister byte = 4
 )
 
 // 加密帧类型常量。
@@ -69,6 +72,14 @@ type Probe struct {
 	DeviceID string `json:"device_id"`
 	// Role 发送方角色："client" 或 "home-server"。
 	Role string `json:"role"`
+}
+
+// Register 是设备注册探测包的结构，用于 NAT 端点发现。
+type Register struct {
+	// DeviceID 发送方的设备 ID，用于服务器关联 WebSocket 会话。
+	DeviceID string `json:"device_id"`
+	// Token 设备认证令牌，用于服务器验证合法性。
+	Token string `json:"token"`
 }
 
 // Hello 是打洞握手包的结构。
@@ -121,6 +132,11 @@ type Frame struct {
 // MarshalProbe 将 Probe 结构序列化为 UDP 探测包。
 func MarshalProbe(value Probe) ([]byte, error) {
 	return marshalControl(PacketProbe, value)
+}
+
+// MarshalRegister 将 Register 结构序列化为 UDP 注册探测包。
+func MarshalRegister(value Register) ([]byte, error) {
+	return marshalControl(PacketRegister, value)
 }
 
 // MarshalHello 将 Hello 结构序列化为 UDP 握手包。
