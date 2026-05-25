@@ -405,6 +405,10 @@ type PeerCandidate struct {
 	// ObservedEndpoint 服务器观察到的 NAT 映射后公网端点（host:port 格式）。
 	// 通过 UDP 注册探测发现，比 Endpoint 更准确。优先使用此字段。
 	ObservedEndpoint string `json:"observed_endpoint,omitempty"`
+	// Candidates is the ordered IPv4 endpoint list the peer should punch.
+	// The first item is the preferred observed endpoint; later items are
+	// conservative fallbacks derived from WebSocket and reported UDP ports.
+	Candidates []string `json:"candidates,omitempty"`
 	// UDPPort 对端监听的 UDP 端口。
 	UDPPort int `json:"udp_port"`
 	// RemoteAddr WebSocket 连接的源地址（host:port），用于多路径打洞候选。

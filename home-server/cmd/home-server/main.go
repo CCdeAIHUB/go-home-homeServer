@@ -44,6 +44,7 @@ func main() {
 	authCodeFile := flag.String("auth-code-file", "", "file containing server authorization code")
 	udpPort := flag.Int("udp-port", 47777, "local UDP port for P2P hole punching")
 	enableUPnP := flag.Bool("upnp", true, "attempt same-port UPnP UDP mapping for the direct tunnel")
+	enableNATPMP := flag.Bool("nat-pmp", true, "attempt same-port NAT-PMP UDP mapping for the direct tunnel")
 	lanCIDR := flag.String("lan-cidr", "", "home LAN CIDR override")
 	lanInterface := flag.String("lan-interface", "", "home LAN interface label override")
 	deviceIDFile := flag.String("device-id-file", defaultDeviceIDFile(), "device id persistence file")
@@ -74,13 +75,17 @@ func main() {
 	defer udpConn.Close()
 	udp := newUDPService(udpConn, identity, *lanInterface)
 	go udp.readLoop()
-	if *enableUPnP {
-		go portmap.MaintainUPnP(context.Background(), uint16(*udpPort), *lanInterface)
-	}
 
 	// 监听信号，优雅关闭
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if *enableUPnP {
+		go portmap.MaintainUPnP(ctx, uint16(*udpPort), *lanInterface)
+	}
+	if *enableNATPMP {
+		go portmap.MaintainNATPMP(ctx, uint16(*udpPort))
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 

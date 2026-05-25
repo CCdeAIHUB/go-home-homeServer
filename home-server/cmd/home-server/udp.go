@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,48 +97,16 @@ func newUDPService(conn net.PacketConn, identity *security.Identity, iface strin
 }
 
 // acceptOffer 接受服务器的打洞邀请，向客户端发送 UDP 探测包。
-// 探测包发送 5 次，递增延迟（120ms × attempt），用于 P2P 打洞。
+// 探测包会向所有候选端点多轮发送，用于 P2P 打洞。
 func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 	s.mu.Lock()
 	s.offers[offer.SessionID] = offer
 	s.mu.Unlock()
 
-	// 优先使用服务器观察到的 NAT 映射端点
-	endpoint := offer.Client.Endpoint
-	if offer.Client.ObservedEndpoint != "" {
-		endpoint = offer.Client.ObservedEndpoint
-	}
-	addr, err := net.ResolveUDPAddr("udp", endpoint)
+	candidates, err := resolvePeerUDPCandidates(offer.Client)
 	if err != nil {
-		log.Printf("resolve client endpoint for session %s: %v", offer.SessionID, err)
+		log.Printf("resolve client candidates for session %s: %v", offer.SessionID, err)
 		return
-	}
-
-	// 收集候选端点（observed + reported），用于多路径打洞
-	candidates := []*net.UDPAddr{addr}
-	if offer.Client.ObservedEndpoint != "" && offer.Client.Endpoint != "" && offer.Client.ObservedEndpoint != offer.Client.Endpoint {
-		if alt, err := net.ResolveUDPAddr("udp", offer.Client.Endpoint); err == nil {
-			candidates = append(candidates, alt)
-		}
-	}
-	// 使用 WebSocket 源地址 IP + 报告的 UDP 端口作为额外候选
-	if offer.Client.RemoteAddr != "" && offer.Client.UDPPort > 0 {
-		host, _, splitErr := net.SplitHostPort(offer.Client.RemoteAddr)
-		if splitErr == nil {
-			remoteUDP := net.JoinHostPort(host, strconv.Itoa(offer.Client.UDPPort))
-			dup := false
-			for _, c := range candidates {
-				if c.String() == remoteUDP {
-					dup = true
-					break
-				}
-			}
-			if !dup {
-				if alt, err := net.ResolveUDPAddr("udp", remoteUDP); err == nil {
-					candidates = append(candidates, alt)
-				}
-			}
-		}
 	}
 	log.Printf("UDP probe candidates for session %s: %v", offer.SessionID, candidates)
 
@@ -152,7 +121,7 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 	}
 
 	go func() {
-		for attempt := 0; attempt < 8; attempt++ {
+		for attempt := 0; attempt < 12; attempt++ {
 			// 向所有候选端点发送探测包
 			for _, candidate := range candidates {
 				if _, err := s.conn.WriteTo(packet, candidate); err != nil {
@@ -160,9 +129,105 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 					return
 				}
 			}
-			time.Sleep(time.Duration(attempt+1) * 120 * time.Millisecond)
+			wait := time.Duration(attempt+1) * 100 * time.Millisecond
+			if wait > time.Second {
+				wait = time.Second
+			}
+			time.Sleep(wait)
 		}
 	}()
+}
+
+func resolvePeerUDPCandidates(peer protocol.PeerCandidate) ([]*net.UDPAddr, error) {
+	endpoints := peerCandidateEndpoints(peer)
+	if len(endpoints) == 0 {
+		return nil, errors.New("peer has no usable IPv4 UDP candidate")
+	}
+	var out []*net.UDPAddr
+	var lastErr error
+	seen := map[string]bool{}
+	for _, endpoint := range endpoints {
+		addr, err := net.ResolveUDPAddr("udp4", endpoint)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		key := addr.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, addr)
+	}
+	if len(out) == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, errors.New("peer candidates could not be resolved")
+	}
+	return out, nil
+}
+
+func peerCandidateEndpoints(peer protocol.PeerCandidate) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(endpoint string) {
+		normalized, ok := normalizeIPv4Endpoint(endpoint)
+		if !ok || seen[normalized] {
+			return
+		}
+		seen[normalized] = true
+		out = append(out, normalized)
+	}
+	for _, endpoint := range peer.Candidates {
+		add(endpoint)
+	}
+	add(peer.ObservedEndpoint)
+	add(peer.Endpoint)
+	if peer.UDPPort > 0 {
+		for _, endpoint := range []string{peer.ObservedEndpoint, peer.Endpoint, peer.RemoteAddr} {
+			if host, ok := endpointHost(endpoint); ok {
+				add(net.JoinHostPort(host, strconv.Itoa(peer.UDPPort)))
+			}
+		}
+	}
+	return out
+}
+
+func endpointHost(endpoint string) (string, bool) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", false
+	}
+	host, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		host = endpoint
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil || ip.To4() == nil {
+		return "", false
+	}
+	return ip.To4().String(), true
+}
+
+func normalizeIPv4Endpoint(endpoint string) (string, bool) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", false
+	}
+	host, portText, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return "", false
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil || ip.To4() == nil {
+		return "", false
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return "", false
+	}
+	return net.JoinHostPort(ip.To4().String(), strconv.Itoa(port)), true
 }
 
 // readLoop 持续读取 UDP 数据包并分发给处理函数。
