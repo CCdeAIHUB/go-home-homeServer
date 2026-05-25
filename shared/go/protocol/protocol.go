@@ -265,6 +265,9 @@ type DeviceAuthResult struct {
 	// ServerUDPPort 公网服务器的 UDP 监听端口，设备应向此端口发送 UDP 注册探测包
 	// 以便服务器发现 NAT 映射后的公网端点。0 表示服务器未启用 UDP 监听。
 	ServerUDPPort int `json:"server_udp_port,omitempty"`
+	// ServerUDPPorts 公网服务器的 UDP 观测端口列表。
+	// 设备应使用同一个本地 UDP socket 向这些端口发送注册探测包，以收集多组 NAT 映射端点。
+	ServerUDPPorts []int `json:"server_udp_ports,omitempty"`
 }
 
 // LANReportParams 是 device.lan.report 的请求参数。

@@ -162,8 +162,8 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 	}
 
 	// 启动 UDP 注册探测（NAT 端点发现）
-	if authResult.ServerUDPPort > 0 {
-		go registerUDPLoop(ctx, serverURL, authResult.ServerUDPPort, deviceID, authResult.Token, udpConn)
+	if ports := serverUDPPorts(authResult); len(ports) > 0 {
+		go registerUDPLoop(ctx, serverURL, ports, deviceID, authResult.Token, udpConn)
 	}
 
 	ticker := time.NewTicker(30 * time.Second)
@@ -336,7 +336,23 @@ func defaultIdentityFile() string {
 
 // registerUDPLoop 定期向公网服务器发送 UDP 注册探测包，
 // 让服务器发现本设备 NAT 映射后的公网端点。
-func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPort int, deviceID, token string, udpConn net.PacketConn) {
+func serverUDPPorts(authResult protocol.DeviceAuthResult) []int {
+	seen := map[int]bool{}
+	var ports []int
+	for _, port := range authResult.ServerUDPPorts {
+		if port < 1 || port > 65535 || seen[port] {
+			continue
+		}
+		seen[port] = true
+		ports = append(ports, port)
+	}
+	if authResult.ServerUDPPort > 0 && !seen[authResult.ServerUDPPort] {
+		ports = append([]int{authResult.ServerUDPPort}, ports...)
+	}
+	return ports
+}
+
+func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPorts []int, deviceID, token string, udpConn net.PacketConn) {
 	// 从 WebSocket URL 解析服务器主机名
 	wsURL := serverURL
 	wsURL = strings.Replace(wsURL, "wss://", "https://", 1)
@@ -347,9 +363,17 @@ func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPort int, d
 		return
 	}
 	host := parsed.Hostname()
-	serverAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, fmt.Sprintf("%d", serverUDPPort)))
-	if err != nil {
-		log.Printf("resolve server UDP address: %v", err)
+	var serverAddrs []*net.UDPAddr
+	for _, port := range serverUDPPorts {
+		serverAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+		if err != nil {
+			log.Printf("resolve server UDP address %d: %v", port, err)
+			continue
+		}
+		serverAddrs = append(serverAddrs, serverAddr)
+	}
+	if len(serverAddrs) == 0 {
+		log.Printf("no usable server UDP discovery address")
 		return
 	}
 
@@ -365,9 +389,18 @@ func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPort int, d
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
-	// 立即发送一次
-	if _, err := udpConn.WriteTo(packet, serverAddr); err != nil {
-		log.Printf("send UDP register: %v", err)
+	sendUDPRegisters := func() {
+		for _, serverAddr := range serverAddrs {
+			if _, err := udpConn.WriteTo(packet, serverAddr); err != nil {
+				log.Printf("send UDP register to %s: %v", serverAddr, err)
+			}
+		}
+	}
+
+	// 立即连续发送几轮，让公网服务器尽快收集多组 NAT 映射。
+	for i := 0; i < 3; i++ {
+		sendUDPRegisters()
+		time.Sleep(120 * time.Millisecond)
 	}
 
 	for {
@@ -375,9 +408,7 @@ func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPort int, d
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if _, err := udpConn.WriteTo(packet, serverAddr); err != nil {
-				log.Printf("send UDP register: %v", err)
-			}
+			sendUDPRegisters()
 		}
 	}
 }
