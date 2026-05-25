@@ -26,8 +26,8 @@ const candidatePortPredictionWindow = 16
 //   - 维护活跃隧道会话（SM4 密钥、对端地址、流量统计）
 //   - 定期回收过期会话，释放 DHCP 租约和 ProxyARP 条目
 type udpService struct {
-	// conn UDP 监听连接。
-	conn net.PacketConn
+	// conns UDP 监听连接，第一项为主连接，其余为打洞辅助连接。
+	conns []net.PacketConn
 	// identity SM2 身份，用于解密客户端发送的会话密钥。
 	identity *security.Identity
 	// iface 局域网网卡名称，用于 DHCP 代理和 ProxyARP。
@@ -51,6 +51,8 @@ type udpSession struct {
 	key []byte
 	// peer 对端（客户端）的公网地址。
 	peer net.Addr
+	// conn 收到该会话握手的 UDP 连接，后续加密帧固定从该连接发送。
+	conn net.PacketConn
 	// sendSeq 发送序列号，递增用于防重放和排序。
 	sendSeq uint64
 	// replay 接收侧的 64 位滑动窗口重放检测器。
@@ -86,9 +88,12 @@ type packetLink interface {
 }
 
 // newUDPService 创建 UDP 隧道服务并启动过期会话回收循环。
-func newUDPService(conn net.PacketConn, identity *security.Identity, iface string) *udpService {
+func newUDPService(conns []net.PacketConn, identity *security.Identity, iface string) *udpService {
+	if len(conns) == 0 {
+		panic("udp service requires at least one packet conn")
+	}
 	service := &udpService{
-		conn:     conn,
+		conns:    conns,
 		identity: identity,
 		iface:    iface,
 		offers:   map[string]protocol.HolePunchOffer{},
@@ -96,6 +101,10 @@ func newUDPService(conn net.PacketConn, identity *security.Identity, iface strin
 	}
 	go service.reapLoop()
 	return service
+}
+
+func (s *udpService) primaryConn() net.PacketConn {
+	return s.conns[0]
 }
 
 // acceptOffer 接受服务器的打洞邀请，向客户端发送 UDP 探测包。
@@ -127,15 +136,17 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 		attempt := 0
 		for time.Now().Before(deadline) {
 			// 向所有候选端点发送探测包
-			for _, candidate := range candidates {
-				if _, err := s.conn.WriteTo(packet, candidate); err != nil {
-					log.Printf("send UDP probe for session %s to %s: %v", offer.SessionID, candidate, err)
+			for _, conn := range s.conns {
+				for _, candidate := range candidates {
+					if _, err := conn.WriteTo(packet, candidate); err != nil {
+						log.Printf("send UDP probe for session %s from %s to %s: %v", offer.SessionID, conn.LocalAddr(), candidate, err)
+					}
 				}
 			}
 			time.Sleep(punchInterval(attempt))
 			attempt++
 		}
-		log.Printf("UDP probe burst finished for session %s: attempts=%d candidates=%d", offer.SessionID, attempt, len(candidates))
+		log.Printf("UDP probe burst finished for session %s: attempts=%d candidates=%d sockets=%d", offer.SessionID, attempt, len(candidates), len(s.conns))
 	}()
 }
 
@@ -260,12 +271,19 @@ func normalizeIPv4Endpoint(endpoint string) (string, bool) {
 	return net.JoinHostPort(host, strconv.Itoa(port)), true
 }
 
+func (s *udpService) readLoops() {
+	for _, conn := range s.conns {
+		conn := conn
+		go s.readLoop(conn)
+	}
+}
+
 // readLoop 持续读取 UDP 数据包并分发给处理函数。
 // 遇到临时性错误时记录日志并继续，遇到致命错误时退出。
-func (s *udpService) readLoop() {
+func (s *udpService) readLoop(conn net.PacketConn) {
 	buf := make([]byte, 64*1024)
 	for {
-		n, addr, err := s.conn.ReadFrom(buf)
+		n, addr, err := conn.ReadFrom(buf)
 		if err != nil {
 			// 记录错误但不退出，尝试恢复读取
 			if isTemporaryError(err) {
@@ -276,7 +294,7 @@ func (s *udpService) readLoop() {
 			return
 		}
 		packet := append([]byte(nil), buf[:n]...)
-		if err := s.handlePacket(packet, addr); err != nil {
+		if err := s.handlePacket(conn, packet, addr); err != nil {
 			log.Printf("udp packet rejected from %s: %v", addr.String(), err)
 		}
 	}
@@ -292,7 +310,7 @@ func isTemporaryError(err error) bool {
 }
 
 // handlePacket 根据数据包类型分发处理。
-func (s *udpService) handlePacket(packet []byte, addr net.Addr) error {
+func (s *udpService) handlePacket(conn net.PacketConn, packet []byte, addr net.Addr) error {
 	kind, err := tunnel.PacketKind(packet)
 	if err != nil {
 		return err
@@ -306,9 +324,9 @@ func (s *udpService) handlePacket(packet []byte, addr net.Addr) error {
 		if err := tunnel.UnmarshalControl(packet, &hello); err != nil {
 			return err
 		}
-		return s.handleHello(hello, addr)
+		return s.handleHello(conn, hello, addr)
 	case tunnel.PacketFrame:
-		return s.handleFrame(packet, addr)
+		return s.handleFrame(conn, packet, addr)
 	default:
 		return fmt.Errorf("unknown UDP packet kind %d", kind)
 	}
@@ -318,7 +336,7 @@ func (s *udpService) handlePacket(packet []byte, addr net.Addr) error {
 // 流程：1) 验证 sessionID 和客户端身份；2) 解密 SM4 会话密钥；
 // 3) 通过 DHCP 代理为客户端分配 IP；4) 发现局域网设备；
 // 5) 构建并发送 Ready 帧；6) 创建 TUN 虚拟网卡。
-func (s *udpService) handleHello(hello tunnel.Hello, addr net.Addr) error {
+func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr net.Addr) error {
 	s.mu.RLock()
 	offer, ok := s.offers[hello.SessionID]
 	existing := s.sessions[hello.SessionID]
@@ -332,6 +350,7 @@ func (s *udpService) handleHello(hello tunnel.Hello, addr net.Addr) error {
 	// 如果会话已存在（客户端重发 Hello），更新对端地址并重发 Ready
 	if existing != nil {
 		existing.mu.Lock()
+		existing.conn = conn
 		existing.peer = addr
 		existing.seenAt = time.Now()
 		ready := append([]byte(nil), existing.ready...)
@@ -362,11 +381,12 @@ func (s *udpService) handleHello(hello tunnel.Hello, addr net.Addr) error {
 	if err != nil {
 		return err
 	}
-	session := &udpSession{offer: offer, key: key, peer: addr, ready: ready, seenAt: time.Now(), lease: homeLease}
+	session := &udpSession{offer: offer, key: key, peer: addr, conn: conn, ready: ready, seenAt: time.Now(), lease: homeLease}
 	s.mu.Lock()
 	if current := s.sessions[hello.SessionID]; current != nil {
 		s.mu.Unlock()
 		current.mu.Lock()
+		current.conn = conn
 		current.peer = addr
 		current.seenAt = time.Now()
 		replayedReady := append([]byte(nil), current.ready...)
@@ -425,7 +445,7 @@ func (s *udpService) leaseClientIP(offer protocol.HolePunchOffer) *lan.Lease {
 }
 
 // handleFrame 处理加密帧数据。
-func (s *udpService) handleFrame(packet []byte, addr net.Addr) error {
+func (s *udpService) handleFrame(conn net.PacketConn, packet []byte, addr net.Addr) error {
 	sessionID, err := frameSessionID(packet)
 	if err != nil {
 		return err
@@ -445,6 +465,7 @@ func (s *udpService) handleFrame(packet []byte, addr net.Addr) error {
 		session.mu.Unlock()
 		return fmt.Errorf("secure frame sequence %d was already seen", frame.Sequence)
 	}
+	session.conn = conn
 	session.peer = addr
 	session.seenAt = time.Now()
 	session.down += uint64(len(packet))
@@ -482,13 +503,17 @@ func (s *udpService) sendFrame(session *udpSession, frameType byte, payload []by
 	session.sendSeq++
 	sequence := session.sendSeq
 	peer := session.peer
+	conn := session.conn
 	session.mu.Unlock()
+	if conn == nil {
+		conn = s.primaryConn()
+	}
 
 	packet, err := tunnel.Seal(session.key, session.offer.SessionID, sequence, frameType, payload)
 	if err != nil {
 		return err
 	}
-	_, err = s.conn.WriteTo(packet, peer)
+	_, err = conn.WriteTo(packet, peer)
 	if err == nil {
 		session.mu.Lock()
 		session.up += uint64(len(packet))

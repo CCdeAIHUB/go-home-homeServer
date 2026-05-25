@@ -43,6 +43,7 @@ func main() {
 	authCode := flag.String("auth-code", "GOHOME-CHANGE-ME", "server authorization code")
 	authCodeFile := flag.String("auth-code-file", "", "file containing server authorization code")
 	udpPort := flag.Int("udp-port", 47777, "local UDP port for P2P hole punching")
+	udpSockets := flag.Int("udp-sockets", 8, "number of local UDP sockets used for hole punching")
 	enableUPnP := flag.Bool("upnp", true, "attempt same-port UPnP UDP mapping for the direct tunnel")
 	enableNATPMP := flag.Bool("nat-pmp", true, "attempt same-port NAT-PMP UDP mapping for the direct tunnel")
 	lanCIDR := flag.String("lan-cidr", "", "home LAN CIDR override")
@@ -68,13 +69,15 @@ func main() {
 	}
 	log.Printf("home-server device id: %s", deviceID)
 
-	udpConn, err := net.ListenPacket("udp", fmt.Sprintf(":%d", *udpPort))
+	udpConns, err := openUDPSockets(*udpPort, *udpSockets)
 	if err != nil {
 		log.Fatalf("udp listen: %v", err)
 	}
-	defer udpConn.Close()
-	udp := newUDPService(udpConn, identity, *lanInterface)
-	go udp.readLoop()
+	for _, conn := range udpConns {
+		defer conn.Close()
+	}
+	udp := newUDPService(udpConns, identity, *lanInterface)
+	udp.readLoops()
 
 	// 监听信号，优雅关闭
 	ctx, cancel := context.WithCancel(context.Background())
@@ -99,7 +102,7 @@ func main() {
 	}()
 
 	for {
-		if err := run(ctx, *serverURL, loadedAuthCode, deviceID, identity.PublicPEM, *udpPort, *lanCIDR, *lanInterface, udp, udpConn); err != nil {
+		if err := run(ctx, *serverURL, loadedAuthCode, deviceID, identity.PublicPEM, *udpPort, *lanCIDR, *lanInterface, udp, udpConns); err != nil {
 			log.Printf("connection ended: %v", err)
 		}
 		select {
@@ -110,9 +113,36 @@ func main() {
 	}
 }
 
+func openUDPSockets(primaryPort, socketCount int) ([]net.PacketConn, error) {
+	if socketCount < 1 {
+		socketCount = 1
+	}
+	if socketCount > 16 {
+		socketCount = 16
+	}
+	conns := make([]net.PacketConn, 0, socketCount)
+	primary, err := net.ListenPacket("udp", fmt.Sprintf(":%d", primaryPort))
+	if err != nil {
+		return nil, err
+	}
+	conns = append(conns, primary)
+	for len(conns) < socketCount {
+		conn, err := net.ListenPacket("udp", ":0")
+		if err != nil {
+			log.Printf("auxiliary UDP socket unavailable: %v", err)
+			break
+		}
+		conns = append(conns, conn)
+	}
+	for index, conn := range conns {
+		log.Printf("UDP punch socket[%d] listening on %s", index, conn.LocalAddr())
+	}
+	return conns, nil
+}
+
 // run 执行一次到公网服务器的连接生命周期：认证 → 心跳 → 断线。
 // 断线后由 main 循环重连。
-func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, udpPort int, lanCIDR, lanInterface string, udp *udpService, udpConn net.PacketConn) error {
+func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, udpPort int, lanCIDR, lanInterface string, udp *udpService, udpConns []net.PacketConn) error {
 	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		return err
@@ -163,7 +193,7 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 
 	// 启动 UDP 注册探测（NAT 端点发现）
 	if ports := serverUDPPorts(authResult); len(ports) > 0 {
-		go registerUDPLoop(ctx, serverURL, ports, deviceID, authResult.Token, udpConn)
+		go registerUDPLoop(ctx, serverURL, ports, deviceID, authResult.Token, udpConns)
 	}
 
 	ticker := time.NewTicker(30 * time.Second)
@@ -352,7 +382,7 @@ func serverUDPPorts(authResult protocol.DeviceAuthResult) []int {
 	return ports
 }
 
-func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPorts []int, deviceID, token string, udpConn net.PacketConn) {
+func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPorts []int, deviceID, token string, udpConns []net.PacketConn) {
 	// 从 WebSocket URL 解析服务器主机名
 	wsURL := serverURL
 	wsURL = strings.Replace(wsURL, "wss://", "https://", 1)
@@ -390,9 +420,11 @@ func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPorts []int
 	defer ticker.Stop()
 
 	sendUDPRegisters := func() {
-		for _, serverAddr := range serverAddrs {
-			if _, err := udpConn.WriteTo(packet, serverAddr); err != nil {
-				log.Printf("send UDP register to %s: %v", serverAddr, err)
+		for _, udpConn := range udpConns {
+			for _, serverAddr := range serverAddrs {
+				if _, err := udpConn.WriteTo(packet, serverAddr); err != nil {
+					log.Printf("send UDP register from %s to %s: %v", udpConn.LocalAddr(), serverAddr, err)
+				}
 			}
 		}
 	}
