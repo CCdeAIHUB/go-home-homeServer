@@ -18,6 +18,8 @@ import (
 	"gohome/shared/tunnel"
 )
 
+const candidatePortPredictionWindow = 16
+
 // udpService 管理 UDP 隧道的所有会话，负责：
 //   - 接受服务器的打洞邀请，向客户端发送探测包
 //   - 读取并处理 UDP 数据包（探测、握手、加密帧）
@@ -121,21 +123,33 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 	}
 
 	go func() {
-		for attempt := 0; attempt < 12; attempt++ {
+		deadline := time.Now().Add(15 * time.Second)
+		attempt := 0
+		for time.Now().Before(deadline) {
 			// 向所有候选端点发送探测包
 			for _, candidate := range candidates {
 				if _, err := s.conn.WriteTo(packet, candidate); err != nil {
 					log.Printf("send UDP probe for session %s to %s: %v", offer.SessionID, candidate, err)
-					return
 				}
 			}
-			wait := time.Duration(attempt+1) * 100 * time.Millisecond
-			if wait > time.Second {
-				wait = time.Second
-			}
-			time.Sleep(wait)
+			time.Sleep(punchInterval(attempt))
+			attempt++
 		}
+		log.Printf("UDP probe burst finished for session %s: attempts=%d candidates=%d", offer.SessionID, attempt, len(candidates))
 	}()
+}
+
+func punchInterval(attempt int) time.Duration {
+	switch {
+	case attempt < 24:
+		return 35 * time.Millisecond
+	case attempt < 64:
+		return 100 * time.Millisecond
+	case attempt < 100:
+		return 250 * time.Millisecond
+	default:
+		return 500 * time.Millisecond
+	}
 }
 
 func resolvePeerUDPCandidates(peer protocol.PeerCandidate) ([]*net.UDPAddr, error) {
@@ -191,43 +205,59 @@ func peerCandidateEndpoints(peer protocol.PeerCandidate) []string {
 			}
 		}
 	}
+	base := append([]string(nil), out...)
+	for _, endpoint := range base {
+		addPortPredictionWindow(add, endpoint)
+	}
 	return out
 }
 
-func endpointHost(endpoint string) (string, bool) {
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		return "", false
+func addPortPredictionWindow(add func(string), endpoint string) {
+	host, port, ok := endpointParts(endpoint)
+	if !ok {
+		return
 	}
-	host, _, err := net.SplitHostPort(endpoint)
-	if err != nil {
-		host = endpoint
+	for delta := 1; delta <= candidatePortPredictionWindow; delta++ {
+		if port+delta <= 65535 {
+			add(net.JoinHostPort(host, strconv.Itoa(port+delta)))
+		}
+		if port-delta >= 1 {
+			add(net.JoinHostPort(host, strconv.Itoa(port-delta)))
+		}
 	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil || ip.To4() == nil {
-		return "", false
-	}
-	return ip.To4().String(), true
 }
 
-func normalizeIPv4Endpoint(endpoint string) (string, bool) {
+func endpointHost(endpoint string) (string, bool) {
+	host, _, ok := endpointParts(endpoint)
+	return host, ok
+}
+
+func endpointParts(endpoint string) (string, int, bool) {
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" {
-		return "", false
+		return "", 0, false
 	}
 	host, portText, err := net.SplitHostPort(endpoint)
 	if err != nil {
-		return "", false
+		return "", 0, false
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))
 	if ip == nil || ip.To4() == nil {
-		return "", false
+		return "", 0, false
 	}
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 1 || port > 65535 {
+		return "", 0, false
+	}
+	return ip.To4().String(), port, true
+}
+
+func normalizeIPv4Endpoint(endpoint string) (string, bool) {
+	host, port, ok := endpointParts(endpoint)
+	if !ok {
 		return "", false
 	}
-	return net.JoinHostPort(ip.To4().String(), strconv.Itoa(port)), true
+	return net.JoinHostPort(host, strconv.Itoa(port)), true
 }
 
 // readLoop 持续读取 UDP 数据包并分发给处理函数。
