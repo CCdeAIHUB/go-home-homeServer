@@ -1,6 +1,9 @@
 package lan
 
-import "net"
+import (
+	"net"
+	"strings"
+)
 
 type Info struct {
 	CIDR      string
@@ -13,8 +16,12 @@ func Detect() Info {
 	if err != nil {
 		return Info{}
 	}
+	var candidates []Info
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if isVirtualNonLANInterface(iface.Name) {
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -26,10 +33,50 @@ func Detect() Info {
 			if !ok || !isPrivate(ip) {
 				continue
 			}
-			return Info{CIDR: network.String(), Interface: iface.Name}
+			info := Info{CIDR: network.String(), Interface: iface.Name}
+			if isPreferredLANInterface(iface.Name) {
+				return info
+			}
+			candidates = append(candidates, info)
 		}
 	}
+	for _, candidate := range candidates {
+		if interfaceLooksLikeGateway(candidate.Interface, candidate.CIDR) {
+			return candidate
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
 	return Info{}
+}
+
+func isPreferredLANInterface(name string) bool {
+	name = strings.ToLower(name)
+	return name == "br-lan" || name == "lan" || name == "bridge0"
+}
+
+func isVirtualNonLANInterface(name string) bool {
+	name = strings.ToLower(name)
+	if name == "br-lan" {
+		return false
+	}
+	return strings.HasPrefix(name, "docker") ||
+		strings.HasPrefix(name, "veth") ||
+		strings.HasPrefix(name, "tun") ||
+		strings.HasPrefix(name, "tap") ||
+		strings.HasPrefix(name, "wg") ||
+		strings.HasPrefix(name, "zt") ||
+		(strings.HasPrefix(name, "br-") && name != "br-lan")
+}
+
+func interfaceLooksLikeGateway(_, cidr string) bool {
+	ip, _, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+	ip4 := ip.To4()
+	return ip4 != nil && ip4[3] == 1
 }
 
 func parseIPv4Net(addr net.Addr) (net.IP, *net.IPNet, bool) {

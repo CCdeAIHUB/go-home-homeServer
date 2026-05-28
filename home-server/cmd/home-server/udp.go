@@ -485,6 +485,9 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 	}
 	// 通过 DHCP 代理为客户端分配局域网 IP
 	homeLease := s.leaseClientIP(offer)
+	if homeLease == nil || homeLease.IP == "" {
+		return fmt.Errorf("DHCP proxy lease unavailable for session %s on interface %q", offer.SessionID, s.lanInterface())
+	}
 
 	// 构建 Ready 帧载荷
 	ready, err := json.Marshal(tunnel.Ready{
@@ -542,10 +545,7 @@ func (s *udpService) leaseClientIP(offer protocol.HolePunchOffer) *lan.Lease {
 	if offer.Request.ClientVirtualMAC == "" {
 		return nil
 	}
-	iface := s.iface
-	if iface == "" {
-		iface = lan.Detect().Interface
-	}
+	iface := s.lanInterface()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	lease, err := lan.RequestLease(ctx, iface, offer.Request.ClientVirtualMAC)
@@ -557,6 +557,13 @@ func (s *udpService) leaseClientIP(offer protocol.HolePunchOffer) *lan.Lease {
 		log.Printf("proxy ARP unavailable for session %s IP %s: %v", offer.SessionID, lease.IP, err)
 	}
 	return lease
+}
+
+func (s *udpService) lanInterface() string {
+	if s.iface != "" {
+		return s.iface
+	}
+	return lan.Detect().Interface
 }
 
 // handleFrame 处理加密帧数据。
