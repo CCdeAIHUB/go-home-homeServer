@@ -26,3 +26,7 @@ func (l *Lease) Release() {
 func RequestLease(_ context.Context, _, _ string) (*Lease, error) {
 	return nil, fmt.Errorf("DHCP proxy lease requires Linux")
 }
+
+func ReserveLocalLease(_ context.Context, _, _, _ string) (*Lease, error) {
+	return nil, fmt.Errorf("local lease fallback requires Linux")
+}

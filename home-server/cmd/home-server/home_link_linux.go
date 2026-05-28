@@ -6,19 +6,24 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
 	"golang.zx2c4.com/wireguard/tun"
 )
 
+const homeTunPacketOffset = 10
+
 type homeLink struct {
 	device tun.Device
+	name   string
 	cancel context.CancelFunc
 	once   sync.Once
 }
 
-func newHomeLink(sessionID, clientIP string, send func([]byte) error) (packetLink, error) {
+func newHomeLink(sessionID, clientIP, lanIface string, send func([]byte) error) (packetLink, error) {
 	name := "gh" + sessionID[:min(10, len(sessionID))]
 	device, err := tun.CreateTUN(name, tunnelMTU)
 	if err != nil {
@@ -33,14 +38,20 @@ func newHomeLink(sessionID, clientIP string, send func([]byte) error) (packetLin
 		_ = device.Close()
 		return nil, err
 	}
+	if err := allowHomeLinkFirewall(actualName, lanIface); err != nil {
+		_ = device.Close()
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	link := &homeLink{device: device, cancel: cancel}
+	link := &homeLink{device: device, name: actualName, cancel: cancel}
 	go link.readLoop(ctx, send)
 	return link, nil
 }
 
 func (l *homeLink) WritePacket(packet []byte) error {
-	_, err := l.device.Write([][]byte{packet}, 0)
+	buf := make([]byte, homeTunPacketOffset+len(packet))
+	copy(buf[homeTunPacketOffset:], packet)
+	_, err := l.device.Write([][]byte{buf}, homeTunPacketOffset)
 	return err
 }
 
@@ -48,6 +59,7 @@ func (l *homeLink) Close() error {
 	var err error
 	l.once.Do(func() {
 		l.cancel()
+		cleanupHomeLinkFirewall(l.name)
 		err = l.device.Close()
 	})
 	return err
@@ -91,4 +103,82 @@ func configureHomeLink(name, clientIP string) error {
 		}
 	}
 	return nil
+}
+
+func allowHomeLinkFirewall(name, lanIface string) error {
+	if name == "" {
+		return nil
+	}
+	if _, err := exec.LookPath("nft"); err != nil {
+		return nil
+	}
+	if err := exec.Command("nft", "list", "table", "inet", "fw4").Run(); err != nil {
+		return nil
+	}
+	cleanupHomeLinkFirewall(name)
+	rules := []string{
+		"insert rule inet fw4 input iifname " + strconv.Quote(name) + " accept comment " + nftComment(name, "input"),
+	}
+	if lanIface != "" {
+		rules = append(rules,
+			"insert rule inet fw4 forward iifname "+strconv.Quote(name)+" oifname "+strconv.Quote(lanIface)+" accept comment "+nftComment(name, "forward-in"),
+			"insert rule inet fw4 forward iifname "+strconv.Quote(lanIface)+" oifname "+strconv.Quote(name)+" accept comment "+nftComment(name, "forward-out"),
+		)
+	} else {
+		rules = append(rules, "insert rule inet fw4 forward iifname "+strconv.Quote(name)+" accept comment "+nftComment(name, "forward"))
+	}
+	for _, rule := range rules {
+		if err := applyNFTRule(rule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyNFTRule(rule string) error {
+	command := exec.Command("nft", "-f", "-")
+	command.Stdin = strings.NewReader(rule + "\n")
+	out, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("nft apply %q: %w (%s)", rule, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func cleanupHomeLinkFirewall(name string) {
+	if name == "" {
+		return
+	}
+	deleteCommentedNFTRules("input", name)
+	deleteCommentedNFTRules("forward", name)
+}
+
+func deleteCommentedNFTRules(chain, name string) {
+	out, err := exec.Command("nft", "-a", "list", "chain", "inet", "fw4", chain).CombinedOutput()
+	if err != nil {
+		return
+	}
+	commentPrefix := firewallComment(name, "")
+	handleRe := regexp.MustCompile(`\s# handle ([0-9]+)$`)
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, commentPrefix) {
+			continue
+		}
+		match := handleRe.FindStringSubmatch(line)
+		if len(match) != 2 {
+			continue
+		}
+		_ = exec.Command("nft", "delete", "rule", "inet", "fw4", chain, "handle", match[1]).Run()
+	}
+}
+
+func firewallComment(name, suffix string) string {
+	if suffix == "" {
+		return "go-home:" + name + ":"
+	}
+	return "go-home:" + name + ":" + suffix
+}
+
+func nftComment(name, suffix string) string {
+	return strconv.Quote(firewallComment(name, suffix))
 }

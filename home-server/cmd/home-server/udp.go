@@ -503,6 +503,7 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 	s.mu.Lock()
 	if current := s.sessions[hello.SessionID]; current != nil {
 		s.mu.Unlock()
+		s.releaseLease(offer, homeLease)
 		current.mu.Lock()
 		current.conn = conn
 		current.peer = addr
@@ -519,7 +520,7 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 	}
 	// 创建 TUN 虚拟网卡，将隧道数据桥接到局域网
 	if homeLease.IP != "" {
-		link, err := newHomeLink(hello.SessionID, homeLease.IP, func(packet []byte) error {
+		link, err := newHomeLink(hello.SessionID, homeLease.IP, s.lanInterface(), func(packet []byte) error {
 			if offer.Request.VirtualCIDR != "" {
 				translated, err := lan.TranslateIPv4Subnet(packet, offer.Server.LANCIDR, offer.Request.VirtualCIDR)
 				if err != nil {
@@ -539,6 +540,20 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 	return nil
 }
 
+func (s *udpService) releaseLease(offer protocol.HolePunchOffer, lease *lan.Lease) {
+	if lease == nil {
+		return
+	}
+	if lease.IP != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := lan.DisableProxyARP(ctx, s.lanInterface(), lease.IP); err != nil {
+			log.Printf("proxy ARP cleanup unavailable for session %s IP %s: %v", offer.SessionID, lease.IP, err)
+		}
+		cancel()
+	}
+	lease.Release()
+}
+
 // leaseClientIP 通过 DHCP 代理为客户端分配局域网 IP，并启用代理 ARP。
 // 返回的 *Lease 可通过 Release() 方法释放租约。
 func (s *udpService) leaseClientIP(offer protocol.HolePunchOffer) *lan.Lease {
@@ -546,14 +561,23 @@ func (s *udpService) leaseClientIP(offer protocol.HolePunchOffer) *lan.Lease {
 		return nil
 	}
 	iface := s.lanInterface()
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	lease, err := lan.RequestLease(ctx, iface, offer.Request.ClientVirtualMAC)
 	if err != nil {
 		log.Printf("DHCP proxy lease unavailable for session %s: %v", offer.SessionID, err)
-		return nil
+		fallbackCtx, fallbackCancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer fallbackCancel()
+		lease, err = lan.ReserveLocalLease(fallbackCtx, iface, offer.Server.LANCIDR, offer.Request.ClientVirtualMAC)
+		if err != nil {
+			log.Printf("local LAN lease fallback unavailable for session %s: %v", offer.SessionID, err)
+			return nil
+		}
+		log.Printf("using local LAN lease fallback for session %s: ip=%s iface=%s cidr=%s", offer.SessionID, lease.IP, iface, offer.Server.LANCIDR)
 	}
-	if err := lan.EnableProxyARP(ctx, iface, lease.IP); err != nil {
+	arpCtx, arpCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer arpCancel()
+	if err := lan.EnableProxyARP(arpCtx, iface, lease.IP); err != nil {
 		log.Printf("proxy ARP unavailable for session %s IP %s: %v", offer.SessionID, lease.IP, err)
 	}
 	return lease
