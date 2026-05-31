@@ -35,6 +35,43 @@ func TestReapExpiredClosesIdleSessionLink(t *testing.T) {
 	}
 }
 
+func TestInstallOfferReplacesExistingClientSession(t *testing.T) {
+	link := &closeRecorder{}
+	service := &udpService{
+		offers: map[string]protocol.HolePunchOffer{
+			"old": {SessionID: "old", Client: protocol.PeerCandidate{DeviceID: "client-a"}},
+		},
+		sessions: map[string]*udpSession{
+			"old": {
+				offer: protocol.HolePunchOffer{SessionID: "old", Client: protocol.PeerCandidate{DeviceID: "client-a"}},
+				link:  link,
+			},
+		},
+	}
+
+	replaced := service.installOffer(protocol.HolePunchOffer{
+		SessionID: "new",
+		Client:    protocol.PeerCandidate{DeviceID: "client-a"},
+	})
+	if len(replaced) != 1 {
+		t.Fatalf("expected one replaced session, got %d", len(replaced))
+	}
+	if _, ok := service.sessions["old"]; ok {
+		t.Fatal("old session was not detached")
+	}
+	if _, ok := service.offers["old"]; ok {
+		t.Fatal("old offer was not detached")
+	}
+	if _, ok := service.offers["new"]; !ok {
+		t.Fatal("new offer was not installed")
+	}
+
+	service.cleanupSession(replaced[0])
+	if !link.closed {
+		t.Fatal("replaced session link was not closed")
+	}
+}
+
 func TestPeerCandidateEndpointsUsesServerListFirst(t *testing.T) {
 	peer := protocol.PeerCandidate{
 		Candidates:       []string{"203.0.113.4:50001", "203.0.113.4:50001", "[2001:db8::1]:50001"},

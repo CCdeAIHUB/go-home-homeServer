@@ -14,3 +14,26 @@ DerivedData/
 build/
 .gradle/
 .publish/
+
+# 运行时数据
+data/
+
+# 部署产物与敏感文件（含截图、APK、二进制、真实凭据）
+.deploy/
+
+# 主仓库本地目录（独立管理）
+main-repo/
+
+# 预编译二进制（根目录）
+*-linux-amd64
+server.exe
+home-server.exe
+client-core.exe
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db

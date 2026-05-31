@@ -114,9 +114,11 @@ func (s *udpService) primaryConn() net.PacketConn {
 // acceptOffer 接受服务器的打洞邀请，向客户端发送 UDP 探测包。
 // 探测包会向所有候选端点多轮发送，用于 P2P 打洞。
 func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
-	s.mu.Lock()
-	s.offers[offer.SessionID] = offer
-	s.mu.Unlock()
+	replaced := s.installOffer(offer)
+	for _, session := range replaced {
+		log.Printf("replacing stale UDP session: old_session=%s client=%s new_session=%s", session.offer.SessionID, offer.Client.DeviceID, offer.SessionID)
+		s.cleanupSession(session)
+	}
 
 	baseCandidates, err := resolvePeerUDPBaseCandidates(offer.Client)
 	if err != nil {
@@ -165,6 +167,31 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 		}
 		log.Printf("UDP probe burst finished for session %s: attempts=%d last_window=+/-%d last_batch=%d sockets=%d packets=%d", offer.SessionID, attempt, lastWindow, lastCandidateCount, len(s.conns), sentPackets)
 	}()
+}
+
+// installOffer stores a new punch offer and immediately detaches older
+// sessions for the same client. This lets a restarted client reconnect
+// without waiting for the idle reaper to release its previous TUN and lease.
+func (s *udpService) installOffer(offer protocol.HolePunchOffer) []*udpSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var replaced []*udpSession
+	for sessionID, session := range s.sessions {
+		if sessionID == offer.SessionID || session.offer.Client.DeviceID != offer.Client.DeviceID {
+			continue
+		}
+		replaced = append(replaced, session)
+		delete(s.sessions, sessionID)
+		delete(s.offers, sessionID)
+	}
+	for sessionID, pending := range s.offers {
+		if sessionID != offer.SessionID && pending.Client.DeviceID == offer.Client.DeviceID {
+			delete(s.offers, sessionID)
+		}
+	}
+	s.offers[offer.SessionID] = offer
+	return replaced
 }
 
 func punchInterval(attempt int) time.Duration {
@@ -758,7 +785,7 @@ func (s *udpService) cleanupSession(session *udpSession) {
 	if lease != nil {
 		lease.Release()
 	}
-	log.Printf("session expired and cleaned up: session=%s client=%s", offer.SessionID, offer.Client.DeviceID)
+	log.Printf("session cleaned up: session=%s client=%s", offer.SessionID, offer.Client.DeviceID)
 }
 
 // closeAll 关闭所有活跃会话，用于优雅关闭。
