@@ -147,6 +147,13 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 		lastCandidateCount := 0
 		sentPackets := uint64(0)
 		for time.Now().Before(deadline) {
+			s.mu.RLock()
+			active := s.sessions[offer.SessionID] != nil
+			current, offered := s.offers[offer.SessionID]
+			s.mu.RUnlock()
+			if active || !offered || current.Client.DeviceID != offer.Client.DeviceID {
+				break
+			}
 			candidates := punchCandidateBatch(baseCandidates, attempt, maxProbeCandidatesPerAttempt)
 			window := punchPredictionWindow(attempt)
 			if window != lastWindow {
