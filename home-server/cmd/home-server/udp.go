@@ -39,6 +39,9 @@ type udpService struct {
 
 	// mu 保护 offers 和 sessions 的并发访问。
 	mu sync.RWMutex
+	// helloMu serializes session creation so repeated punch packets cannot
+	// allocate multiple LAN leases before the first session is installed.
+	helloMu sync.Mutex
 	// offers 待处理的打洞邀请，key 为 sessionID。
 	offers map[string]protocol.HolePunchOffer
 	// sessions 活跃的 UDP 隧道会话，key 为 sessionID。
@@ -490,6 +493,20 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 		return fmt.Errorf("client %s is not offered for session %s", hello.ClientDeviceID, hello.SessionID)
 	}
 	// 如果会话已存在（客户端重发 Hello），更新对端地址并重发 Ready
+	if existing != nil {
+		existing.mu.Lock()
+		existing.conn = conn
+		existing.peer = addr
+		existing.seenAt = time.Now()
+		ready := append([]byte(nil), existing.ready...)
+		existing.mu.Unlock()
+		return s.sendFrame(existing, tunnel.FrameReady, ready)
+	}
+	s.helloMu.Lock()
+	defer s.helloMu.Unlock()
+	s.mu.RLock()
+	existing = s.sessions[hello.SessionID]
+	s.mu.RUnlock()
 	if existing != nil {
 		existing.mu.Lock()
 		existing.conn = conn
