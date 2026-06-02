@@ -46,3 +46,20 @@ func TestControlPacketRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected hello: %+v", hello)
 	}
 }
+
+func TestRegisterAckRoundTrip(t *testing.T) {
+	packet, err := MarshalRegisterAck(RegisterAck{ObservedEndpoint: "203.0.113.5:62000"})
+	if err != nil {
+		t.Fatalf("marshal register ack: %v", err)
+	}
+	if kind, err := PacketKind(packet); err != nil || kind != PacketRegisterAck {
+		t.Fatalf("unexpected kind %d err %v", kind, err)
+	}
+	var ack RegisterAck
+	if err := UnmarshalControl(packet, &ack); err != nil {
+		t.Fatalf("unmarshal register ack: %v", err)
+	}
+	if ack.ObservedEndpoint != "203.0.113.5:62000" {
+		t.Fatalf("unexpected ack: %+v", ack)
+	}
+}

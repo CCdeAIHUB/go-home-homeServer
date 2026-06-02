@@ -126,11 +126,12 @@ func openUDPSockets(primaryPort, socketCount int) ([]net.PacketConn, error) {
 		return nil, err
 	}
 	conns = append(conns, primary)
-	for len(conns) < socketCount {
-		conn, err := net.ListenPacket("udp", ":0")
+	for offset := 1; len(conns) < socketCount && primaryPort+offset <= 65535; offset++ {
+		port := primaryPort + offset
+		conn, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
 		if err != nil {
-			log.Printf("auxiliary UDP socket unavailable: %v", err)
-			break
+			log.Printf("auxiliary UDP socket on port %d unavailable: %v", port, err)
+			continue
 		}
 		conns = append(conns, conn)
 	}
@@ -308,6 +309,16 @@ func handleServerEvent(writeJSON func(any) error, udp *udpService, env protocol.
 		}
 		udp.acceptOffer(offer)
 		log.Printf("hole punch offer: client=%s endpoint=%s family=%d", offer.Client.DeviceID, offer.Client.Endpoint, offer.FamilyID)
+	case protocol.EventP2PCandidate:
+		var params struct {
+			SessionID string `json:"session_id"`
+			Candidate string `json:"candidate"`
+		}
+		if err := json.Unmarshal(env.Params, &params); err != nil {
+			log.Printf("bad P2P candidate: %v", err)
+			return
+		}
+		udp.addPunchCandidate(params.SessionID, params.Candidate)
 	case protocol.EventDeviceForceOffline:
 		log.Printf("force offline requested, shutting down")
 		udp.closeAll()

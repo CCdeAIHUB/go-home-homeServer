@@ -42,6 +42,9 @@ const (
 	// PacketRegister 注册探测包，设备发送到公网服务器以发现 NAT 映射后的公网端点。
 	// 服务器收到后记录源地址作为该设备的 observed_endpoint。
 	PacketRegister byte = 4
+	// PacketRegisterAck 是公网服务器对注册探测的确认包。
+	// 它仅用于验证 UDP 入站路径并告知设备公网端点，不承载隧道数据。
+	PacketRegisterAck byte = 5
 )
 
 // 加密帧类型常量。
@@ -80,6 +83,12 @@ type Register struct {
 	DeviceID string `json:"device_id"`
 	// Token 设备认证令牌，用于服务器验证合法性。
 	Token string `json:"token"`
+}
+
+// RegisterAck 是公网服务器返回的 UDP 注册确认。
+type RegisterAck struct {
+	// ObservedEndpoint 是公网服务器看到的设备公网 IPv4 端点。
+	ObservedEndpoint string `json:"observed_endpoint"`
 }
 
 // Hello 是打洞握手包的结构。
@@ -137,6 +146,11 @@ func MarshalProbe(value Probe) ([]byte, error) {
 // MarshalRegister 将 Register 结构序列化为 UDP 注册探测包。
 func MarshalRegister(value Register) ([]byte, error) {
 	return marshalControl(PacketRegister, value)
+}
+
+// MarshalRegisterAck 将 RegisterAck 序列化为 UDP 注册确认包。
+func MarshalRegisterAck(value RegisterAck) ([]byte, error) {
+	return marshalControl(PacketRegisterAck, value)
 }
 
 // MarshalHello 将 Hello 结构序列化为 UDP 握手包。

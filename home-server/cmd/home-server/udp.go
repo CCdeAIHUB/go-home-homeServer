@@ -154,6 +154,9 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 			if active || !offered || current.Client.DeviceID != offer.Client.DeviceID {
 				break
 			}
+			if refreshed, err := resolvePeerUDPBaseCandidates(current.Client); err == nil {
+				baseCandidates = refreshed
+			}
 			candidates := punchCandidateBatch(baseCandidates, attempt, maxProbeCandidatesPerAttempt)
 			window := punchPredictionWindow(attempt)
 			if window != lastWindow {
@@ -177,6 +180,63 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 		}
 		log.Printf("UDP probe burst finished for session %s: attempts=%d last_window=+/-%d last_batch=%d sockets=%d packets=%d", offer.SessionID, attempt, lastWindow, lastCandidateCount, len(s.conns), sentPackets)
 	}()
+}
+
+// addPunchCandidate adds a signaling-assisted candidate discovered while a
+// punch attempt is active. The public server only forwards endpoint metadata;
+// all tunnel packets still travel directly between peers.
+func (s *udpService) addPunchCandidate(sessionID, endpoint string) {
+	normalized, ok := normalizeIPv4Endpoint(endpoint)
+	if !ok || sessionID == "" {
+		return
+	}
+	s.mu.Lock()
+	offer, found := s.offers[sessionID]
+	if !found {
+		s.mu.Unlock()
+		return
+	}
+	if containsString(offer.Client.Candidates, normalized) {
+		s.mu.Unlock()
+		return
+	}
+	offer.Client.Candidates = rememberCandidate(offer.Client.Candidates, normalized)
+	offer.Client.ObservedEndpoint = normalized
+	s.offers[sessionID] = offer
+	s.mu.Unlock()
+	log.Printf("added live UDP candidate for session %s: %s", sessionID, normalized)
+}
+
+func rememberCandidate(candidates []string, candidate string) []string {
+	const maxCandidates = 64
+	out := make([]string, 0, minInt(len(candidates)+1, maxCandidates))
+	out = append(out, candidate)
+	for _, existing := range candidates {
+		if existing == candidate {
+			continue
+		}
+		out = append(out, existing)
+		if len(out) >= maxCandidates {
+			break
+		}
+	}
+	return out
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 // installOffer stores a new punch offer and immediately detaches older
@@ -471,6 +531,9 @@ func (s *udpService) handlePacket(conn net.PacketConn, packet []byte, addr net.A
 	switch kind {
 	case tunnel.PacketProbe:
 		// 探测包静默丢弃（服务器端行为，客户端会处理）
+		return nil
+	case tunnel.PacketRegisterAck:
+		// 公网服务器的 UDP 注册确认仅用于打开和验证入站路径。
 		return nil
 	case tunnel.PacketHello:
 		var hello tunnel.Hello
