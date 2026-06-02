@@ -397,6 +397,9 @@ type HolePunchRequestParams struct {
 	VirtualCIDR string `json:"virtual_cidr,omitempty"`
 	// ClientVirtualMAC 客户端虚拟网卡 MAC 地址（当选择虚拟模式时使用）。
 	ClientVirtualMAC string `json:"client_virtual_mac,omitempty"`
+	// FallbackSweep requests a bounded full-port fallback after the normal
+	// prediction stage misses. It is only enabled for a later retry.
+	FallbackSweep bool `json:"fallback_sweep,omitempty"`
 }
 
 // PeerCandidate 表示 P2P 连接中的一端信息。

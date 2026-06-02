@@ -148,6 +148,7 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 		lastWindow := -1
 		lastCandidateCount := 0
 		sentPackets := uint64(0)
+		fallbackSweep := offer.Request.FallbackSweep
 		for time.Now().Before(deadline) {
 			s.mu.RLock()
 			active := s.sessions[offer.SessionID] != nil
@@ -160,10 +161,14 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 				baseCandidates = refreshed
 			}
 			candidates := punchCandidateBatch(baseCandidates, attempt, maxProbeCandidatesPerAttempt)
+			var sweepCandidates []*net.UDPAddr
+			if fallbackSweep {
+				sweepCandidates = fullPortSweepBatch(baseCandidates, attempt, fullPortSweepBatchSize)
+			}
 			window := punchPredictionWindow(attempt)
 			if window != lastWindow {
 				total := len(expandUDPCandidates(baseCandidates, window))
-				log.Printf("UDP probe stage for session %s: attempt=%d window=+/-%d total_candidates=%d batch=%d sockets=%d", offer.SessionID, attempt, window, total, len(candidates), len(s.conns))
+				log.Printf("UDP probe stage for session %s: attempt=%d window=+/-%d total_candidates=%d batch=%d sweep=%d sockets=%d", offer.SessionID, attempt, window, total, len(candidates), len(sweepCandidates), len(s.conns))
 				lastWindow = window
 			}
 			lastCandidateCount = len(candidates)
@@ -175,6 +180,13 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 					} else {
 						sentPackets++
 					}
+				}
+			}
+			for _, candidate := range sweepCandidates {
+				if _, err := s.primaryConn().WriteTo(packet, candidate); err != nil {
+					log.Printf("send UDP sweep probe for session %s from %s to %s: %v", offer.SessionID, s.primaryConn().LocalAddr(), candidate, err)
+				} else {
+					sentPackets++
 				}
 			}
 			time.Sleep(punchInterval(attempt))
