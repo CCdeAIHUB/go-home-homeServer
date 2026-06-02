@@ -21,7 +21,9 @@ import (
 const (
 	candidatePortPredictionWindow  = 16
 	aggressivePortPredictionWindow = 512
-	maxProbeCandidatesPerAttempt   = 192
+	maxProbeCandidatesPerAttempt   = 48
+	fullPortSweepStartAttempt      = 32
+	fullPortSweepBatchSize         = 1024
 )
 
 // udpService 管理 UDP 隧道的所有会话，负责：
@@ -158,10 +160,11 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 				baseCandidates = refreshed
 			}
 			candidates := punchCandidateBatch(baseCandidates, attempt, maxProbeCandidatesPerAttempt)
+			sweepCandidates := fullPortSweepBatch(baseCandidates, attempt, fullPortSweepBatchSize)
 			window := punchPredictionWindow(attempt)
 			if window != lastWindow {
 				total := len(expandUDPCandidates(baseCandidates, window))
-				log.Printf("UDP probe stage for session %s: attempt=%d window=+/-%d total_candidates=%d batch=%d sockets=%d", offer.SessionID, attempt, window, total, len(candidates), len(s.conns))
+				log.Printf("UDP probe stage for session %s: attempt=%d window=+/-%d total_candidates=%d batch=%d sweep=%d sockets=%d", offer.SessionID, attempt, window, total, len(candidates), len(sweepCandidates), len(s.conns))
 				lastWindow = window
 			}
 			lastCandidateCount = len(candidates)
@@ -173,6 +176,13 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 					} else {
 						sentPackets++
 					}
+				}
+			}
+			for _, candidate := range sweepCandidates {
+				if _, err := s.primaryConn().WriteTo(packet, candidate); err != nil {
+					log.Printf("send UDP sweep probe for session %s from %s to %s: %v", offer.SessionID, s.primaryConn().LocalAddr(), candidate, err)
+				} else {
+					sentPackets++
 				}
 			}
 			time.Sleep(punchInterval(attempt))
@@ -333,6 +343,41 @@ func punchCandidateBatch(base []*net.UDPAddr, attempt int, maxBatch int) []*net.
 	offset := (attempt * room) % len(rotating)
 	for i := 0; i < room; i++ {
 		out = append(out, rotating[(offset+i)%len(rotating)])
+	}
+	return out
+}
+
+func fullPortSweepBatch(base []*net.UDPAddr, attempt int, maxBatch int) []*net.UDPAddr {
+	if attempt < fullPortSweepStartAttempt || maxBatch <= 0 {
+		return nil
+	}
+	var hosts []net.IP
+	seen := map[string]bool{}
+	for _, candidate := range base {
+		if candidate == nil || candidate.IP == nil || candidate.IP.To4() == nil {
+			continue
+		}
+		host := candidate.IP.To4()
+		key := host.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		hosts = append(hosts, host)
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	out := make([]*net.UDPAddr, 0, maxBatch)
+	offset := ((attempt - fullPortSweepStartAttempt) * maxBatch) % 65535
+	for index := 0; index < 65535 && len(out) < maxBatch; index++ {
+		port := (offset+index)%65535 + 1
+		for _, host := range hosts {
+			out = append(out, &net.UDPAddr{IP: host, Port: port})
+			if len(out) >= maxBatch {
+				break
+			}
+		}
 	}
 	return out
 }
