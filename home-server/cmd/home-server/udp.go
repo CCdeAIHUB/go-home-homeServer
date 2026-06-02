@@ -21,7 +21,7 @@ import (
 const (
 	candidatePortPredictionWindow  = 16
 	aggressivePortPredictionWindow = 512
-	maxProbeCandidatesPerAttempt   = 48
+	maxProbeCandidatesPerAttempt   = 192
 	fullPortSweepStartAttempt      = 32
 	fullPortSweepBatchSize         = 1024
 )
@@ -143,7 +143,7 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 	}
 
 	go func() {
-		deadline := time.Now().Add(45 * time.Second)
+		deadline := time.Now().Add(25 * time.Second)
 		attempt := 0
 		lastWindow := -1
 		lastCandidateCount := 0
@@ -160,11 +160,10 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 				baseCandidates = refreshed
 			}
 			candidates := punchCandidateBatch(baseCandidates, attempt, maxProbeCandidatesPerAttempt)
-			sweepCandidates := fullPortSweepBatch(baseCandidates, attempt, fullPortSweepBatchSize)
 			window := punchPredictionWindow(attempt)
 			if window != lastWindow {
 				total := len(expandUDPCandidates(baseCandidates, window))
-				log.Printf("UDP probe stage for session %s: attempt=%d window=+/-%d total_candidates=%d batch=%d sweep=%d sockets=%d", offer.SessionID, attempt, window, total, len(candidates), len(sweepCandidates), len(s.conns))
+				log.Printf("UDP probe stage for session %s: attempt=%d window=+/-%d total_candidates=%d batch=%d sockets=%d", offer.SessionID, attempt, window, total, len(candidates), len(s.conns))
 				lastWindow = window
 			}
 			lastCandidateCount = len(candidates)
@@ -176,13 +175,6 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 					} else {
 						sentPackets++
 					}
-				}
-			}
-			for _, candidate := range sweepCandidates {
-				if _, err := s.primaryConn().WriteTo(packet, candidate); err != nil {
-					log.Printf("send UDP sweep probe for session %s from %s to %s: %v", offer.SessionID, s.primaryConn().LocalAddr(), candidate, err)
-				} else {
-					sentPackets++
 				}
 			}
 			time.Sleep(punchInterval(attempt))
