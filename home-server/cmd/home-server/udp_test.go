@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -98,6 +99,29 @@ func TestPeerCandidateEndpointsUsesServerListFirst(t *testing.T) {
 	}
 	if !containsEndpoint(got, "203.0.113.4:50003") || !containsEndpoint(got, "203.0.113.4:50000") {
 		t.Fatalf("peerCandidateEndpoints did not include predicted adjacent ports: %#v", got)
+	}
+}
+
+func TestExpandUDPCandidatesSpreadsAdjacentPortsAcrossBaseEndpoints(t *testing.T) {
+	got := expandUDPCandidates([]*net.UDPAddr{
+		{IP: net.ParseIP("203.0.113.4"), Port: 5000},
+		{IP: net.ParseIP("203.0.113.4"), Port: 6000},
+	}, 2)
+	want := []string{
+		"203.0.113.4:5000",
+		"203.0.113.4:6000",
+		"203.0.113.4:5001",
+		"203.0.113.4:4999",
+		"203.0.113.4:6001",
+		"203.0.113.4:5999",
+	}
+	if len(got) < len(want) {
+		t.Fatalf("expandUDPCandidates got too few candidates: %#v", got)
+	}
+	for index, endpoint := range want {
+		if got[index].String() != endpoint {
+			t.Fatalf("expandUDPCandidates[%d] got %q want %q; all=%#v", index, got[index], endpoint, got)
+		}
 	}
 }
 

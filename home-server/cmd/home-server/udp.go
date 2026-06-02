@@ -21,7 +21,7 @@ import (
 const (
 	candidatePortPredictionWindow  = 16
 	aggressivePortPredictionWindow = 512
-	maxProbeCandidatesPerAttempt   = 192
+	maxProbeCandidatesPerAttempt   = 48
 )
 
 // udpService 管理 UDP 隧道的所有会话，负责：
@@ -141,7 +141,7 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 	}
 
 	go func() {
-		deadline := time.Now().Add(25 * time.Second)
+		deadline := time.Now().Add(45 * time.Second)
 		attempt := 0
 		lastWindow := -1
 		lastCandidateCount := 0
@@ -308,8 +308,9 @@ func expandUDPCandidates(base []*net.UDPAddr, window int) []*net.UDPAddr {
 	for _, addr := range base {
 		add(addr)
 	}
-	for _, addr := range append([]*net.UDPAddr(nil), out...) {
-		for delta := 1; delta <= window; delta++ {
+	exact := append([]*net.UDPAddr(nil), out...)
+	for delta := 1; delta <= window; delta++ {
+		for _, addr := range exact {
 			if addr.Port+delta <= 65535 {
 				add(&net.UDPAddr{IP: addr.IP, Port: addr.Port + delta})
 			}
