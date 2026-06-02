@@ -125,6 +125,30 @@ func TestExpandUDPCandidatesSpreadsAdjacentPortsAcrossBaseEndpoints(t *testing.T
 	}
 }
 
+func TestFullPortSweepBatchStartsAfterPredictionAndRotates(t *testing.T) {
+	base := []*net.UDPAddr{
+		{IP: net.ParseIP("203.0.113.4"), Port: 5000},
+		{IP: net.ParseIP("203.0.113.4"), Port: 6000},
+	}
+	if got := fullPortSweepBatch(base, fullPortSweepStartAttempt-1, 3); len(got) != 0 {
+		t.Fatalf("fullPortSweepBatch started before fallback stage: %#v", got)
+	}
+	first := fullPortSweepBatch(base, fullPortSweepStartAttempt, 3)
+	second := fullPortSweepBatch(base, fullPortSweepStartAttempt+1, 3)
+	wantFirst := []string{"203.0.113.4:1", "203.0.113.4:2", "203.0.113.4:3"}
+	wantSecond := []string{"203.0.113.4:4", "203.0.113.4:5", "203.0.113.4:6"}
+	for index, want := range wantFirst {
+		if first[index].String() != want {
+			t.Fatalf("fullPortSweepBatch first[%d] got %q want %q", index, first[index], want)
+		}
+	}
+	for index, want := range wantSecond {
+		if second[index].String() != want {
+			t.Fatalf("fullPortSweepBatch second[%d] got %q want %q", index, second[index], want)
+		}
+	}
+}
+
 func containsEndpoint(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {
