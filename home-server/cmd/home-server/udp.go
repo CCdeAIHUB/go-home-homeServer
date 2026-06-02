@@ -21,9 +21,7 @@ import (
 const (
 	candidatePortPredictionWindow  = 16
 	aggressivePortPredictionWindow = 512
-	maxProbeCandidatesPerAttempt   = 48
-	fullPortSweepStartAttempt      = 32
-	fullPortSweepBatchSize         = 1024
+	maxProbeCandidatesPerAttempt   = 192
 )
 
 // udpService 管理 UDP 隧道的所有会话，负责：
@@ -160,11 +158,10 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 				baseCandidates = refreshed
 			}
 			candidates := punchCandidateBatch(baseCandidates, attempt, maxProbeCandidatesPerAttempt)
-			sweepCandidates := fullPortSweepBatch(baseCandidates, attempt, fullPortSweepBatchSize)
 			window := punchPredictionWindow(attempt)
 			if window != lastWindow {
 				total := len(expandUDPCandidates(baseCandidates, window))
-				log.Printf("UDP probe stage for session %s: attempt=%d window=+/-%d total_candidates=%d batch=%d sweep=%d sockets=%d", offer.SessionID, attempt, window, total, len(candidates), len(sweepCandidates), len(s.conns))
+				log.Printf("UDP probe stage for session %s: attempt=%d window=+/-%d total_candidates=%d batch=%d sockets=%d", offer.SessionID, attempt, window, total, len(candidates), len(s.conns))
 				lastWindow = window
 			}
 			lastCandidateCount = len(candidates)
@@ -176,15 +173,6 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 					} else {
 						sentPackets++
 					}
-				}
-			}
-			// 双方都处于随机端口映射 NAT 时，邻近端口预测不足以命中。
-			// 常规阶段失败后，仅使用主 socket 渐进遍历端口空间，限制带宽开销。
-			for _, candidate := range sweepCandidates {
-				if _, err := s.primaryConn().WriteTo(packet, candidate); err != nil {
-					log.Printf("send UDP sweep probe for session %s from %s to %s: %v", offer.SessionID, s.primaryConn().LocalAddr(), candidate, err)
-				} else {
-					sentPackets++
 				}
 			}
 			time.Sleep(punchInterval(attempt))
@@ -345,41 +333,6 @@ func punchCandidateBatch(base []*net.UDPAddr, attempt int, maxBatch int) []*net.
 	offset := (attempt * room) % len(rotating)
 	for i := 0; i < room; i++ {
 		out = append(out, rotating[(offset+i)%len(rotating)])
-	}
-	return out
-}
-
-func fullPortSweepBatch(base []*net.UDPAddr, attempt int, maxBatch int) []*net.UDPAddr {
-	if attempt < fullPortSweepStartAttempt || maxBatch <= 0 {
-		return nil
-	}
-	var hosts []net.IP
-	seen := map[string]bool{}
-	for _, candidate := range base {
-		if candidate == nil || candidate.IP == nil || candidate.IP.To4() == nil {
-			continue
-		}
-		host := candidate.IP.To4()
-		key := host.String()
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		hosts = append(hosts, host)
-	}
-	if len(hosts) == 0 {
-		return nil
-	}
-	out := make([]*net.UDPAddr, 0, maxBatch)
-	offset := ((attempt - fullPortSweepStartAttempt) * maxBatch) % 65535
-	for index := 0; index < 65535 && len(out) < maxBatch; index++ {
-		port := (offset+index)%65535 + 1
-		for _, host := range hosts {
-			out = append(out, &net.UDPAddr{IP: host, Port: port})
-			if len(out) >= maxBatch {
-				break
-			}
-		}
 	}
 	return out
 }
@@ -610,6 +563,11 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 	if hello.ClientDeviceID != offer.Client.DeviceID {
 		return fmt.Errorf("client %s is not offered for session %s", hello.ClientDeviceID, hello.SessionID)
 	}
+	// Reply immediately from the socket that received Hello. Cellular NATs can
+	// keep this return path open only briefly; DHCP and LAN setup happen later.
+	if err := s.sendProbeReply(conn, offer, addr); err != nil {
+		log.Printf("send immediate UDP probe reply for session %s from %s to %s: %v", hello.SessionID, conn.LocalAddr(), addr, err)
+	}
 	// 如果会话已存在（客户端重发 Hello），更新对端地址并重发 Ready
 	if existing != nil {
 		existing.mu.Lock()
@@ -698,8 +656,21 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 			session.link = link
 		}
 	}
-	log.Printf("UDP tunnel ready: session=%s client=%s peer=%s", hello.SessionID, hello.ClientDeviceID, addr.String())
+	log.Printf("UDP tunnel ready: session=%s client=%s local=%s peer=%s", hello.SessionID, hello.ClientDeviceID, conn.LocalAddr(), addr.String())
 	return nil
+}
+
+func (s *udpService) sendProbeReply(conn net.PacketConn, offer protocol.HolePunchOffer, addr net.Addr) error {
+	packet, err := tunnel.MarshalProbe(tunnel.Probe{
+		SessionID: offer.SessionID,
+		DeviceID:  offer.Server.DeviceID,
+		Role:      protocol.DeviceTypeHomeServer,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = conn.WriteTo(packet, addr)
+	return err
 }
 
 func (s *udpService) releaseLease(offer protocol.HolePunchOffer, lease *lan.Lease) {

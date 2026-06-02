@@ -126,12 +126,11 @@ func openUDPSockets(primaryPort, socketCount int) ([]net.PacketConn, error) {
 		return nil, err
 	}
 	conns = append(conns, primary)
-	for offset := 1; len(conns) < socketCount && primaryPort+offset <= 65535; offset++ {
-		port := primaryPort + offset
-		conn, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
+	for len(conns) < socketCount {
+		conn, err := net.ListenPacket("udp", ":0")
 		if err != nil {
-			log.Printf("auxiliary UDP socket on port %d unavailable: %v", port, err)
-			continue
+			log.Printf("auxiliary UDP socket unavailable: %v", err)
+			break
 		}
 		conns = append(conns, conn)
 	}

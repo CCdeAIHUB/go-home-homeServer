@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gohome/shared/protocol"
+	"gohome/shared/tunnel"
 )
 
 type closeRecorder struct {
@@ -125,27 +126,44 @@ func TestExpandUDPCandidatesSpreadsAdjacentPortsAcrossBaseEndpoints(t *testing.T
 	}
 }
 
-func TestFullPortSweepBatchStartsAfterPredictionAndRotates(t *testing.T) {
-	base := []*net.UDPAddr{
-		{IP: net.ParseIP("203.0.113.4"), Port: 5000},
-		{IP: net.ParseIP("203.0.113.4"), Port: 6000},
+func TestSendProbeReplyUsesReceivingSocket(t *testing.T) {
+	sender, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := fullPortSweepBatch(base, fullPortSweepStartAttempt-1, 3); len(got) != 0 {
-		t.Fatalf("fullPortSweepBatch started before fallback stage: %#v", got)
+	defer sender.Close()
+	receiver, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	first := fullPortSweepBatch(base, fullPortSweepStartAttempt, 3)
-	second := fullPortSweepBatch(base, fullPortSweepStartAttempt+1, 3)
-	wantFirst := []string{"203.0.113.4:1", "203.0.113.4:2", "203.0.113.4:3"}
-	wantSecond := []string{"203.0.113.4:4", "203.0.113.4:5", "203.0.113.4:6"}
-	for index, want := range wantFirst {
-		if first[index].String() != want {
-			t.Fatalf("fullPortSweepBatch first[%d] got %q want %q", index, first[index], want)
-		}
+	defer receiver.Close()
+
+	offer := protocol.HolePunchOffer{
+		SessionID: "session",
+		Server: protocol.PeerCandidate{
+			DeviceID: "home-server",
+		},
 	}
-	for index, want := range wantSecond {
-		if second[index].String() != want {
-			t.Fatalf("fullPortSweepBatch second[%d] got %q want %q", index, second[index], want)
-		}
+	if err := (&udpService{}).sendProbeReply(sender, offer, receiver.LocalAddr()); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiver.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	packet := make([]byte, 1024)
+	n, addr, err := receiver.ReadFrom(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addr.String() != sender.LocalAddr().String() {
+		t.Fatalf("probe reply source got %q want %q", addr, sender.LocalAddr())
+	}
+	var probe tunnel.Probe
+	if err := tunnel.UnmarshalControl(packet[:n], &probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.SessionID != offer.SessionID || probe.DeviceID != offer.Server.DeviceID {
+		t.Fatalf("probe reply got %#v", probe)
 	}
 }
 
