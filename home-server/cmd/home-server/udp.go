@@ -24,6 +24,8 @@ const (
 	maxProbeCandidatesPerAttempt   = 192
 	fullPortSweepStartAttempt      = 32
 	fullPortSweepBatchSize         = 1024
+	readyBurstDuration             = 2200 * time.Millisecond
+	readyBurstInterval             = 120 * time.Millisecond
 )
 
 // udpService 管理 UDP 隧道的所有会话，负责：
@@ -625,7 +627,7 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 		existing.seenAt = time.Now()
 		ready := append([]byte(nil), existing.ready...)
 		existing.mu.Unlock()
-		return s.sendFrame(existing, tunnel.FrameReady, ready)
+		return s.sendReadyBurst(existing, ready, "existing")
 	}
 	s.helloMu.Lock()
 	defer s.helloMu.Unlock()
@@ -639,7 +641,7 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 		existing.seenAt = time.Now()
 		ready := append([]byte(nil), existing.ready...)
 		existing.mu.Unlock()
-		return s.sendFrame(existing, tunnel.FrameReady, ready)
+		return s.sendReadyBurst(existing, ready, "locked-existing")
 	}
 	// 用 SM2 私钥解密会话密钥
 	key, err := s.identity.Decrypt(hello.EncryptedSessionKey)
@@ -679,12 +681,12 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 		current.seenAt = time.Now()
 		replayedReady := append([]byte(nil), current.ready...)
 		current.mu.Unlock()
-		return s.sendFrame(current, tunnel.FrameReady, replayedReady)
+		return s.sendReadyBurst(current, replayedReady, "raced-existing")
 	}
 	s.sessions[hello.SessionID] = session
 	s.mu.Unlock()
 
-	if err := s.sendFrame(session, tunnel.FrameReady, ready); err != nil {
+	if err := s.sendReadyBurst(session, ready, "new"); err != nil {
 		return err
 	}
 	// 创建 TUN 虚拟网卡，将隧道数据桥接到局域网
@@ -706,6 +708,29 @@ func (s *udpService) handleHello(conn net.PacketConn, hello tunnel.Hello, addr n
 		}
 	}
 	log.Printf("UDP tunnel ready: session=%s client=%s local=%s peer=%s", hello.SessionID, hello.ClientDeviceID, conn.LocalAddr(), addr.String())
+	return nil
+}
+
+func (s *udpService) sendReadyBurst(session *udpSession, ready []byte, reason string) error {
+	if err := s.sendFrame(session, tunnel.FrameReady, ready); err != nil {
+		return err
+	}
+	sessionID := session.offer.SessionID
+	go func() {
+		ticker := time.NewTicker(readyBurstInterval)
+		defer ticker.Stop()
+		deadline := time.Now().Add(readyBurstDuration)
+		sent := 1
+		for time.Now().Before(deadline) {
+			<-ticker.C
+			if err := s.sendFrame(session, tunnel.FrameReady, ready); err != nil {
+				log.Printf("UDP ready replay failed: session=%s reason=%s sent=%d: %v", sessionID, reason, sent, err)
+				return
+			}
+			sent++
+		}
+		log.Printf("UDP ready replay finished: session=%s reason=%s sent=%d", sessionID, reason, sent)
+	}()
 	return nil
 }
 
