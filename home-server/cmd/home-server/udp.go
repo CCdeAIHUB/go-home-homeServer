@@ -24,8 +24,8 @@ const (
 	maxProbeCandidatesPerAttempt   = 256
 	fullPortSweepStartAttempt      = 32
 	fullPortSweepBatchSize         = 1024
-	readyBurstDuration             = 2200 * time.Millisecond
-	readyBurstInterval             = 120 * time.Millisecond
+	readyBurstDuration             = 10 * time.Second
+	readyBurstInterval             = 180 * time.Millisecond
 )
 
 // udpService 管理 UDP 隧道的所有会话，负责：
@@ -145,9 +145,9 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 	}
 
 	go func() {
-		timeout := 45 * time.Second
+		timeout := 60 * time.Second
 		if offer.Request.FallbackSweep {
-			timeout = 75 * time.Second
+			timeout = 90 * time.Second
 		}
 		deadline := time.Now().Add(timeout)
 		attempt := 0
@@ -919,7 +919,7 @@ func (s *udpService) reapLoop() {
 // reapExpired 清理超过 idleTimeout 的过期会话。
 // 过期清理包括：1) 移除 ProxyARP 条目；2) 释放 DHCP 租约；3) 关闭 TUN 设备。
 func (s *udpService) reapExpired(now time.Time) {
-	const idleTimeout = 45 * time.Second
+	const idleTimeout = 150 * time.Second
 	var expired []*udpSession
 	s.mu.Lock()
 	for sessionID, session := range s.sessions {

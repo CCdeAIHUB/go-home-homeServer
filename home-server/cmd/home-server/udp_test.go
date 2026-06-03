@@ -28,7 +28,14 @@ func TestReapExpiredClosesIdleSessionLink(t *testing.T) {
 			"session": {link: link, seenAt: time.Unix(1, 0)},
 		},
 	}
-	service.reapExpired(time.Unix(60, 0))
+	service.reapExpired(time.Unix(120, 0))
+	if len(service.sessions) != 1 || len(service.offers) != 1 {
+		t.Fatalf("idle session was removed before grace window: sessions=%d offers=%d", len(service.sessions), len(service.offers))
+	}
+	if link.closed {
+		t.Fatal("idle session link was closed before grace window")
+	}
+	service.reapExpired(time.Unix(180, 0))
 	if len(service.sessions) != 0 || len(service.offers) != 0 {
 		t.Fatalf("idle session was not removed: sessions=%d offers=%d", len(service.sessions), len(service.offers))
 	}
