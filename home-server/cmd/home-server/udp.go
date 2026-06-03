@@ -21,7 +21,7 @@ import (
 const (
 	candidatePortPredictionWindow  = 16
 	aggressivePortPredictionWindow = 512
-	maxProbeCandidatesPerAttempt   = 192
+	maxProbeCandidatesPerAttempt   = 256
 	fullPortSweepStartAttempt      = 32
 	fullPortSweepBatchSize         = 1024
 	readyBurstDuration             = 2200 * time.Millisecond
@@ -145,7 +145,11 @@ func (s *udpService) acceptOffer(offer protocol.HolePunchOffer) {
 	}
 
 	go func() {
-		deadline := time.Now().Add(25 * time.Second)
+		timeout := 45 * time.Second
+		if offer.Request.FallbackSweep {
+			timeout = 75 * time.Second
+		}
+		deadline := time.Now().Add(timeout)
 		attempt := 0
 		lastWindow := -1
 		lastCandidateCount := 0
