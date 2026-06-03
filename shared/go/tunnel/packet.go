@@ -83,6 +83,8 @@ type Register struct {
 	DeviceID string `json:"device_id"`
 	// Token 设备认证令牌，用于服务器验证合法性。
 	Token string `json:"token"`
+	// UDPPort 发送注册探测的本地 UDP 端口，用于刷新本次打洞端口集合。
+	UDPPort int `json:"udp_port,omitempty"`
 }
 
 // RegisterAck 是公网服务器返回的 UDP 注册确认。

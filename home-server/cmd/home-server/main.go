@@ -417,20 +417,24 @@ func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPorts []int
 		return
 	}
 
-	packet, err := tunnel.MarshalRegister(tunnel.Register{
-		DeviceID: deviceID,
-		Token:    token,
-	})
-	if err != nil {
-		log.Printf("marshal register packet: %v", err)
-		return
-	}
-
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	sendUDPRegisters := func() {
 		for _, udpConn := range udpConns {
+			localUDPPort := 0
+			if addr, ok := udpConn.LocalAddr().(*net.UDPAddr); ok {
+				localUDPPort = addr.Port
+			}
+			packet, err := tunnel.MarshalRegister(tunnel.Register{
+				DeviceID: deviceID,
+				Token:    token,
+				UDPPort: localUDPPort,
+			})
+			if err != nil {
+				log.Printf("marshal register packet: %v", err)
+				continue
+			}
 			for _, serverAddr := range serverAddrs {
 				if _, err := udpConn.WriteTo(packet, serverAddr); err != nil {
 					log.Printf("send UDP register from %s to %s: %v", udpConn.LocalAddr(), serverAddr, err)
