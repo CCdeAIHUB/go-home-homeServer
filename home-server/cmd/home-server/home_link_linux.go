@@ -137,7 +137,21 @@ func allowHomeLinkFirewall(name, clientIP, lanIface string) error {
 			return err
 		}
 	}
+	if err := allowPasswallDNSBypass(name); err != nil {
+		return err
+	}
 	return nil
+}
+
+func allowPasswallDNSBypass(name string) error {
+	if name == "" {
+		return nil
+	}
+	if err := exec.Command("nft", "list", "chain", "inet", "passwall", "PSW_DNS").Run(); err != nil {
+		return nil
+	}
+	rule := "insert rule inet passwall PSW_DNS iifname " + strconv.Quote(name) + " return comment " + nftComment(name, "passwall-dns-bypass")
+	return applyNFTRule(rule)
 }
 
 func applyNFTRule(rule string) error {
@@ -157,10 +171,15 @@ func cleanupHomeLinkFirewall(name string) {
 	deleteCommentedNFTRules("input", name)
 	deleteCommentedNFTRules("forward", name)
 	deleteCommentedNFTRules("srcnat", name)
+	deleteCommentedNFTRulesFromTable("passwall", "PSW_DNS", name)
 }
 
 func deleteCommentedNFTRules(chain, name string) {
-	out, err := exec.Command("nft", "-a", "list", "chain", "inet", "fw4", chain).CombinedOutput()
+	deleteCommentedNFTRulesFromTable("fw4", chain, name)
+}
+
+func deleteCommentedNFTRulesFromTable(table, chain, name string) {
+	out, err := exec.Command("nft", "-a", "list", "chain", "inet", table, chain).CombinedOutput()
 	if err != nil {
 		return
 	}
@@ -174,7 +193,7 @@ func deleteCommentedNFTRules(chain, name string) {
 		if len(match) != 2 {
 			continue
 		}
-		_ = exec.Command("nft", "delete", "rule", "inet", "fw4", chain, "handle", match[1]).Run()
+		_ = exec.Command("nft", "delete", "rule", "inet", table, chain, "handle", match[1]).Run()
 	}
 }
 
