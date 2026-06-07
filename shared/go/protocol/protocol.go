@@ -395,6 +395,8 @@ type HolePunchRequestParams struct {
 	PreferredMode string `json:"preferred_mode,omitempty"`
 	// VirtualCIDR 客户端期望的虚拟 CIDR（当选择虚拟模式时使用）。
 	VirtualCIDR string `json:"virtual_cidr,omitempty"`
+	// RoutePolicy controls client-side VPN routing: "lan" or "full".
+	RoutePolicy string `json:"route_policy,omitempty"`
 	// ClientVirtualMAC 客户端虚拟网卡 MAC 地址（当选择虚拟模式时使用）。
 	ClientVirtualMAC string `json:"client_virtual_mac,omitempty"`
 	// FallbackSweep requests a bounded full-port fallback after the normal

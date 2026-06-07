@@ -118,14 +118,14 @@ func allowHomeLinkFirewall(name, lanIface string) error {
 	cleanupHomeLinkFirewall(name)
 	rules := []string{
 		"insert rule inet fw4 input iifname " + strconv.Quote(name) + " accept comment " + nftComment(name, "input"),
+		"insert rule inet fw4 forward iifname " + strconv.Quote(name) + " accept comment " + nftComment(name, "forward-in"),
+		"insert rule inet fw4 forward oifname " + strconv.Quote(name) + " accept comment " + nftComment(name, "forward-out"),
 	}
 	if lanIface != "" {
 		rules = append(rules,
-			"insert rule inet fw4 forward iifname "+strconv.Quote(name)+" oifname "+strconv.Quote(lanIface)+" accept comment "+nftComment(name, "forward-in"),
-			"insert rule inet fw4 forward iifname "+strconv.Quote(lanIface)+" oifname "+strconv.Quote(name)+" accept comment "+nftComment(name, "forward-out"),
+			"insert rule inet fw4 forward iifname "+strconv.Quote(name)+" oifname "+strconv.Quote(lanIface)+" accept comment "+nftComment(name, "forward-lan-in"),
+			"insert rule inet fw4 forward iifname "+strconv.Quote(lanIface)+" oifname "+strconv.Quote(name)+" accept comment "+nftComment(name, "forward-lan-out"),
 		)
-	} else {
-		rules = append(rules, "insert rule inet fw4 forward iifname "+strconv.Quote(name)+" accept comment "+nftComment(name, "forward"))
 	}
 	for _, rule := range rules {
 		if err := applyNFTRule(rule); err != nil {
