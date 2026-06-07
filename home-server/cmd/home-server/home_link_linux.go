@@ -38,7 +38,7 @@ func newHomeLink(sessionID, clientIP, lanIface string, send func([]byte) error) 
 		_ = device.Close()
 		return nil, err
 	}
-	if err := allowHomeLinkFirewall(actualName, lanIface); err != nil {
+	if err := allowHomeLinkFirewall(actualName, clientIP, lanIface); err != nil {
 		_ = device.Close()
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func configureHomeLink(name, clientIP string) error {
 	return nil
 }
 
-func allowHomeLinkFirewall(name, lanIface string) error {
+func allowHomeLinkFirewall(name, clientIP, lanIface string) error {
 	if name == "" {
 		return nil
 	}
@@ -125,6 +125,11 @@ func allowHomeLinkFirewall(name, lanIface string) error {
 		rules = append(rules,
 			"insert rule inet fw4 forward iifname "+strconv.Quote(name)+" oifname "+strconv.Quote(lanIface)+" accept comment "+nftComment(name, "forward-lan-in"),
 			"insert rule inet fw4 forward iifname "+strconv.Quote(lanIface)+" oifname "+strconv.Quote(name)+" accept comment "+nftComment(name, "forward-lan-out"),
+			"insert rule inet fw4 srcnat ip saddr "+clientIP+"/32 oifname != "+strconv.Quote(lanIface)+" masquerade comment "+nftComment(name, "srcnat"),
+		)
+	} else {
+		rules = append(rules,
+			"insert rule inet fw4 srcnat ip saddr "+clientIP+"/32 oifname != "+strconv.Quote(name)+" masquerade comment "+nftComment(name, "srcnat"),
 		)
 	}
 	for _, rule := range rules {
@@ -151,6 +156,7 @@ func cleanupHomeLinkFirewall(name string) {
 	}
 	deleteCommentedNFTRules("input", name)
 	deleteCommentedNFTRules("forward", name)
+	deleteCommentedNFTRules("srcnat", name)
 }
 
 func deleteCommentedNFTRules(chain, name string) {
