@@ -18,10 +18,14 @@ if [ -n "$BIN_URL" ]; then
   curl -fsSL "$BIN_URL" -o "$TMP_BIN"
 elif [ -f ./go-home-homeserver ]; then
   cp ./go-home-homeserver "$TMP_BIN"
-else
+elif [ -f ./go-home-server ]; then
   cp ./go-home-server "$TMP_BIN"
+else
+  echo "Set GO_HOME_HOME_SERVER_BINARY_URL or place go-home-homeserver in the current directory." >&2
+  exit 1
 fi
-install -m 0755 "$TMP_BIN" "$INSTALL_DIR/go-home-homeserver"
+cp "$TMP_BIN" "$INSTALL_DIR/go-home-homeserver"
+chmod 0755 "$INSTALL_DIR/go-home-homeserver"
 rm -f "$TMP_BIN"
 
 if [ -n "${GO_HOME_AUTH_CODE:-}" ]; then
