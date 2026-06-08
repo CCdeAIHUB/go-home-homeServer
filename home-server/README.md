@@ -1,6 +1,6 @@
 # 家庭服务器
 
-家庭服务器运行在家庭局域网中，当前骨架已经包含：
+家庭服务器运行在家庭局域网中，负责连接公网服务器、参与 UDP 直连打洞、创建家庭侧虚拟链路，并把加密隧道中的 IPv4 数据转发到家庭局域网。
 
 - WebSocket 鉴权与重连。
 - LAN 网段自动检测与上报。
@@ -25,10 +25,28 @@ go run ./cmd/home-server -server ws://your-server.example.com:8080/ws -auth-code
 
 家庭路由器支持 UPnP 时默认会尝试把 `-udp-port` 映射到相同外部 UDP 端口。受限网络或不希望自动映射时可用 `-upnp=false` 关闭。
 
-后续需要在 `internal` 中继续实现：
+## 部署方式
 
-- DHCP 代申请。
-- ARP 代理。
-- LAN 扫描。
-- NAT-PMP、端口预测等扩展打洞策略。
-- DHCP/ARP 接入后的真实 LAN 数据转发。
+### OpenWrt / procd
+
+```sh
+GO_HOME_HOME_SERVER_BINARY_URL="https://example.com/go-home-homeserver" \
+GO_HOME_SERVER_WS="ws://YOUR_PUBLIC_SERVER:8080/ws" \
+GO_HOME_AUTH_CODE="YOUR_AUTH_CODE" \
+GO_HOME_LAN_CIDR="192.168.3.0/24" \
+GO_HOME_LAN_INTERFACE="br-lan" \
+sh scripts/install-openwrt.sh
+```
+
+### Linux systemd
+
+```sh
+sudo GO_HOME_HOME_SERVER_BINARY_URL="https://example.com/go-home-homeserver" \
+  GO_HOME_SERVER_WS="ws://YOUR_PUBLIC_SERVER:8080/ws" \
+  GO_HOME_AUTH_CODE="YOUR_AUTH_CODE" \
+  GO_HOME_LAN_CIDR="192.168.3.0/24" \
+  GO_HOME_LAN_INTERFACE="br-lan" \
+  sh scripts/install-systemd.sh
+```
+
+若未设置 `GO_HOME_HOME_SERVER_BINARY_URL`，脚本会优先使用当前目录中的 `./go-home-homeserver`，其次兼容 CI 旧产物名 `./go-home-server`。

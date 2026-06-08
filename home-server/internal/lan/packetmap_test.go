@@ -22,6 +22,21 @@ func TestTranslateIPv4SubnetRewritesUDPChecksums(t *testing.T) {
 	if afterUDP := binary.BigEndian.Uint16(translated[26:28]); afterUDP == 0 || afterUDP == beforeUDP {
 		t.Fatalf("UDP checksum was not rewritten: before=%#x after=%#x", beforeUDP, afterUDP)
 	}
+	if got := checksum(pseudoPacket(translated, translated[20:], -1)); got != 0 {
+		t.Fatalf("UDP checksum verification got %#x want 0", got)
+	}
+}
+
+func TestTranslateIPv4SubnetRewritesTCPChecksums(t *testing.T) {
+	packet := tcpPacket([4]byte{192, 168, 6, 100}, [4]byte{192, 168, 6, 5})
+
+	translated, err := TranslateIPv4Subnet(packet, "192.168.6.0/24", "192.168.3.0/24")
+	if err != nil {
+		t.Fatalf("translate packet: %v", err)
+	}
+	if got := checksum(pseudoPacket(translated, translated[20:], -1)); got != 0 {
+		t.Fatalf("TCP checksum verification got %#x want 0", got)
+	}
 }
 
 func TestTranslateIPv4SubnetPreservesUnmappedEndpoints(t *testing.T) {
@@ -48,6 +63,23 @@ func udpPacket(src, dst [4]byte) []byte {
 	binary.BigEndian.PutUint16(packet[24:26], 12)
 	copy(packet[28:], []byte{1, 2, 3, 4})
 	writeChecksum(packet[10:12], packet[:20])
-	writeChecksum(packet[26:28], pseudoPacket(packet, packet[20:]))
+	writeChecksum(packet[26:28], pseudoPacket(packet, packet[20:], 6))
+	return packet
+}
+
+func tcpPacket(src, dst [4]byte) []byte {
+	packet := make([]byte, 44)
+	packet[0] = 0x45
+	binary.BigEndian.PutUint16(packet[2:4], uint16(len(packet)))
+	packet[8] = 64
+	packet[9] = 6
+	copy(packet[12:16], src[:])
+	copy(packet[16:20], dst[:])
+	binary.BigEndian.PutUint16(packet[20:22], 40000)
+	binary.BigEndian.PutUint16(packet[22:24], 443)
+	packet[32] = 0x50
+	copy(packet[40:], []byte{1, 2, 3, 4})
+	writeChecksum(packet[10:12], packet[:20])
+	writeChecksum(packet[36:38], pseudoPacket(packet, packet[20:], 16))
 	return packet
 }

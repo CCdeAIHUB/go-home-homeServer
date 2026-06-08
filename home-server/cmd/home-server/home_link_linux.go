@@ -151,6 +151,9 @@ func allowPasswallDNSBypass(name string) error {
 		return nil
 	}
 	rule := "insert rule inet passwall PSW_DNS iifname " + strconv.Quote(name) + " return comment " + nftComment(name, "passwall-dns-bypass")
+	if err := exec.Command("nft", "list", "set", "inet", "passwall", "passwall_lan").Run(); err == nil {
+		rule = "insert rule inet passwall PSW_DNS iifname " + strconv.Quote(name) + " ip daddr != @passwall_lan return comment " + nftComment(name, "passwall-dns-bypass")
+	}
 	return applyNFTRule(rule)
 }
 

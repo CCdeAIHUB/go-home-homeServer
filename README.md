@@ -1,64 +1,68 @@
-# Go Home
+# Go Home Home Server
 
-Go Home 是一个坚持纯 P2P UDP 打洞的虚拟局域网组网工具。公网服务器只负责认证、家庭管理、设备状态和 P2P 信令协调，绝不提供中继转发。
+Go Home Home Server runs inside the home LAN, connects to the public Go Home server for signaling, performs pure UDP hole punching, creates the home-side TUN path, leases/proxies a LAN IP for the remote client, and forwards encrypted tunnel packets to LAN devices.
 
-## 当前仓库状态
+It does not provide relay service and does not send LAN traffic through the public server.
 
-本仓库已经生成第一版工程骨架：
+## Quick Start
 
-- `server`：公网服务器，Go + SQLite + WebSocket JSON-RPC。
-- `web-console`：服务器 Web 控制台，Vue3。
-- `home-server`：家庭服务器，Go 后端服务与 CLI。
-- `client-core`：客户端直连核心，负责 WebSocket 设备鉴权、P2P UDP 打洞握手和加密隧道保活。
-- `client-ui`：客户端共用内嵌 UI，Vue3 + JSAPI。
-- `client-pc`：PC 客户端壳规划，C# Chromium/WebView。
-- `client-ios`、`client-android`、`client-harmony`：移动端平台壳规划。
-- `shared/go`：Go 侧共享协议、安全校验和类型定义。
-- `docs`：工程说明与协议说明。
-
-## 已定死的核心规则
-
-- 不做中继，不采用 IPv6，不提供 fallback relay。
-- 家庭只能由公网服务器 Web 控制台创建和管理。
-- 客户端只能查看可见家庭并选择连接，不能创建、编辑、绑定或解绑家庭。
-- 一个家庭只能绑定一台家庭服务器，但允许多个客户端同时连接。
-- 默认使用家庭真实网段；本地网段冲突时启用备用虚拟网段映射。
-- 全链路采用国密体系设计，跨端可使用不同实现，但协议结果必须兼容。
-
-## 快速启动
-
-```powershell
+```bash
 go work sync
-go run ./server/cmd/server
+go test ./...
+cd home-server
+go run ./cmd/home-server \
+  -server ws://YOUR_PUBLIC_SERVER:8080/ws \
+  -auth-code YOUR_AUTH_CODE \
+  -lan-cidr 192.168.3.0/24 \
+  -lan-interface br-lan
 ```
 
-服务器默认监听 `:8080`，WebSocket 入口为 `/ws`，SQLite 数据库为 `data/go-home.db`。
+Use `-auth-code-file` in production to avoid exposing the auth code in process arguments.
 
-默认管理员密码为 `admin`，默认授权码为 `GOHOME-CHANGE-ME`。生产环境必须通过环境变量或控制台修改。
+## Important Flags
 
-## 工程说明
+| Flag | Purpose |
+| --- | --- |
+| `-server` | Public server WebSocket URL, for example `ws://example.com:8080/ws` |
+| `-auth-code` | Public server authorization code |
+| `-auth-code-file` | File containing the authorization code |
+| `-udp-port` | Local UDP port used for hole punching, default `47777` |
+| `-udp-sockets` | Number of local UDP sockets used during hole punching |
+| `-upnp` | Enable same-port UPnP mapping attempt |
+| `-nat-pmp` | Enable NAT-PMP mapping attempt |
+| `-lan-cidr` | Home LAN CIDR override |
+| `-lan-interface` | Home LAN interface override, for example `br-lan` |
 
-先阅读 [docs/engineering-spec.md](./docs/engineering-spec.md)，它是当前实现的主约束文档。
+## One-Click OpenWrt Install
 
-## 发布到 GitHub
+Download a GitHub Actions artifact or Release binary, then run on the router:
 
-三个远程仓库：
-
-- 公网服务器：`https://github.com/CCdeAIHUB/go-home-server.git`
-- 家庭服务器：`https://github.com/CCdeAIHUB/go-home-homeServer.git`
-- 客户端：`https://github.com/CCdeAIHUB/go-home-client.git`
-
-同步并推送：
-
-```powershell
-.\scripts\publish-repos.ps1 -Message "update go home project" -Push
+```sh
+GO_HOME_HOME_SERVER_BINARY_URL="https://example.com/go-home-homeserver" \
+GO_HOME_SERVER_WS="ws://YOUR_PUBLIC_SERVER:8080/ws" \
+GO_HOME_AUTH_CODE="YOUR_AUTH_CODE" \
+GO_HOME_LAN_CIDR="192.168.3.0/24" \
+GO_HOME_LAN_INTERFACE="br-lan" \
+sh scripts/install-openwrt.sh
 ```
 
-脚本会在 `.publish` 目录中克隆三个仓库，按项目边界同步文件，提交并推送。远程仓库的 GitHub Actions 会在 push 后自动编译。
+If `GO_HOME_HOME_SERVER_BINARY_URL` is not set, the script uses `./go-home-homeserver` or `./go-home-server` in the current directory.
 
-客户端仓库当前优先发布 Android 与 Windows：
+## One-Click Linux systemd Install
 
-- Android：Actions Artifact `go-home-android-debug-apk`
-- Windows：Actions Artifact `go-home-windows-win-x64`
+```sh
+sudo GO_HOME_HOME_SERVER_BINARY_URL="https://example.com/go-home-homeserver" \
+  GO_HOME_SERVER_WS="ws://YOUR_PUBLIC_SERVER:8080/ws" \
+  GO_HOME_AUTH_CODE="YOUR_AUTH_CODE" \
+  GO_HOME_LAN_CIDR="192.168.3.0/24" \
+  GO_HOME_LAN_INTERFACE="br-lan" \
+  sh scripts/install-systemd.sh
+```
 
-其他客户端平台目录保留，但暂不进入 Actions 编译产物链路。
+## Router Proxy Integration
+
+When the client chooses “full home” mode, Android now uses the home router as DNS. On OpenWrt/Passwall routers, Go Home keeps public-DNS fallback traffic usable while allowing router-local DNS to enter the router proxy decision path. This makes the tunneled device behave closer to a normal LAN client.
+
+## CI Artifacts
+
+Every push to `main` runs GitHub Actions and uploads the Linux amd64 home-server binary. Tagged versions (`v*`) are published as GitHub Releases.

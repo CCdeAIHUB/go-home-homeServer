@@ -77,28 +77,32 @@ func rewriteTransportChecksum(packet []byte, headerLen int) {
 	payload := packet[headerLen:]
 	switch packet[9] {
 	case 6:
-		if len(payload) < 18 {
+		if len(payload) < 20 {
 			return
 		}
-		writeChecksum(payload[16:18], pseudoPacket(packet, payload))
+		writeChecksum(payload[16:18], pseudoPacket(packet, payload, 16))
 	case 17:
 		if len(payload) < 8 || binary.BigEndian.Uint16(payload[6:8]) == 0 {
 			return
 		}
-		writeChecksum(payload[6:8], pseudoPacket(packet, payload))
+		writeChecksum(payload[6:8], pseudoPacket(packet, payload, 6))
 		if binary.BigEndian.Uint16(payload[6:8]) == 0 {
 			binary.BigEndian.PutUint16(payload[6:8], 0xffff)
 		}
 	}
 }
 
-func pseudoPacket(packet, payload []byte) []byte {
+func pseudoPacket(packet, payload []byte, checksumOffset int) []byte {
 	pseudo := make([]byte, 12+len(payload))
 	copy(pseudo[0:4], packet[12:16])
 	copy(pseudo[4:8], packet[16:20])
 	pseudo[9] = packet[9]
 	binary.BigEndian.PutUint16(pseudo[10:12], uint16(len(payload)))
 	copy(pseudo[12:], payload)
+	if checksumOffset >= 0 && 12+checksumOffset+1 < len(pseudo) {
+		pseudo[12+checksumOffset] = 0
+		pseudo[12+checksumOffset+1] = 0
+	}
 	return pseudo
 }
 
