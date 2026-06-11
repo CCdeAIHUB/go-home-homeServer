@@ -18,6 +18,9 @@ func EnableProxyARP(ctx context.Context, iface, ip string) error {
 	if parsed := net.ParseIP(ip).To4(); parsed == nil {
 		return fmt.Errorf("invalid proxy ARP IPv4 address %q", ip)
 	}
+	if err := exec.CommandContext(ctx, "sysctl", "-w", "net.ipv4.conf."+iface+".proxy_arp=1").Run(); err != nil {
+		return fmt.Errorf("enable proxy ARP on %s: %w", iface, err)
+	}
 	if err := exec.CommandContext(ctx, "ip", "neigh", "replace", "proxy", ip, "dev", iface).Run(); err != nil {
 		return fmt.Errorf("install proxy ARP neighbor: %w", err)
 	}
