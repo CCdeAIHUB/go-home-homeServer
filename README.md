@@ -61,7 +61,11 @@ sudo GO_HOME_HOME_SERVER_BINARY_URL="https://example.com/go-home-homeserver" \
 
 ## Router Proxy Integration
 
-When the client chooses “full home” mode, Android now uses the home router as DNS. On OpenWrt/Passwall routers, Go Home keeps public-DNS fallback traffic usable while allowing router-local DNS to enter the router proxy decision path. This makes the tunneled device behave closer to a normal LAN client.
+When the client chooses full-home mode, Android uses the home router DNS path so router-side proxy policies can apply. On OpenWrt/Passwall routers, Go Home keeps public-DNS fallback traffic usable while allowing router-local DNS to enter the router proxy decision path. This makes the tunneled device behave closer to a normal LAN client.
+
+For transparent proxy compatibility, each home-side Go Home TUN interface receives a local `100.64.78.x/32` IPv4 address derived from the client's leased home IP. This lets router-local redirect/tproxy services such as Passwall accept traffic from the Go Home interface without requiring per-device manual rules.
+
+The `100.64.78.0/24` addresses are local implementation addresses only. They are not assigned to the remote client and should not be used as the family LAN subnet.
 
 ## CI Artifacts
 
