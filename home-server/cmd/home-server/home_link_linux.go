@@ -151,8 +151,27 @@ func allowHomeLinkFirewall(name, clientIP, lanIface string) error {
 			return err
 		}
 	}
+	if err := captureHomeLinkDNS(name); err != nil {
+		return err
+	}
 	if err := allowPasswallDNSBypass(name); err != nil {
 		return err
+	}
+	return nil
+}
+
+func captureHomeLinkDNS(name string) error {
+	if name == "" {
+		return nil
+	}
+	rules := []string{
+		"insert rule inet fw4 dstnat iifname " + strconv.Quote(name) + " udp dport 53 dnat ip to " + homeDNSServiceIP + ":53 comment " + nftComment(name, "dns-capture"),
+		"insert rule inet fw4 dstnat iifname " + strconv.Quote(name) + " tcp dport 53 dnat ip to " + homeDNSServiceIP + ":53 comment " + nftComment(name, "dns-capture"),
+	}
+	for _, rule := range rules {
+		if err := applyNFTRule(rule); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -184,6 +203,7 @@ func cleanupHomeLinkFirewall(name string) {
 	}
 	deleteCommentedNFTRules("input", name)
 	deleteCommentedNFTRules("forward", name)
+	deleteCommentedNFTRules("dstnat", name)
 	deleteCommentedNFTRules("srcnat", name)
 	deleteCommentedNFTRulesFromTable("passwall", "PSW_DNS", name)
 }
