@@ -51,8 +51,7 @@ func newHomeLink(sessionID, clientIP, lanIface string, send func([]byte) error) 
 	}
 	dnsRelease, err := startHomeDNSProxy()
 	if err != nil {
-		_ = device.Close()
-		return nil, err
+		log.Printf("full-home DNS proxy unavailable for session %s: %v", sessionID, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	link := &homeLink{device: device, name: actualName, cancel: cancel, dnsRelease: dnsRelease}
@@ -109,7 +108,6 @@ func (l *homeLink) readLoop(ctx context.Context, send func([]byte) error) {
 func configureHomeLink(name, clientIP string) error {
 	commands := [][]string{
 		{"ip", "link", "set", "dev", name, "mtu", fmt.Sprintf("%d", tunnelMTU), "up"},
-		{"ip", "addr", "replace", homeDNSServiceIP + "/32", "dev", "lo"},
 		{"ip", "route", "replace", clientIP + "/32", "dev", name},
 		{"sysctl", "-w", "net.ipv4.ip_forward=1"},
 	}
@@ -240,6 +238,10 @@ func startHomeDNSProxy() (func(), error) {
 		return releaseHomeDNSProxy, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	if err := prepareHomeDNSServiceAddress(); err != nil {
+		cancel()
+		return nil, err
+	}
 	udpConn, err := net.ListenPacket("udp", net.JoinHostPort(homeDNSServiceIP, "53"))
 	if err != nil {
 		cancel()
@@ -251,16 +253,42 @@ func startHomeDNSProxy() (func(), error) {
 		cancel()
 		return nil, fmt.Errorf("start full-home DNS TCP proxy: %w", err)
 	}
+	if err := assignHomeDNSServiceAddress(); err != nil {
+		_ = udpConn.Close()
+		_ = tcpLn.Close()
+		cancel()
+		return nil, err
+	}
 	homeDNSProxy.refs = 1
 	homeDNSProxy.cancel = func() {
 		cancel()
 		_ = udpConn.Close()
 		_ = tcpLn.Close()
+		_ = removeHomeDNSServiceAddress()
 	}
 	go serveHomeDNSUDP(ctx, udpConn)
 	go serveHomeDNSTCP(ctx, tcpLn)
 	log.Printf("full-home DNS proxy listening on %s:53", homeDNSServiceIP)
 	return releaseHomeDNSProxy, nil
+}
+
+func prepareHomeDNSServiceAddress() error {
+	_ = removeHomeDNSServiceAddress()
+	if out, err := exec.Command("sysctl", "-w", "net.ipv4.ip_nonlocal_bind=1").CombinedOutput(); err != nil {
+		return fmt.Errorf("enable non-local DNS bind: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func assignHomeDNSServiceAddress() error {
+	if out, err := exec.Command("ip", "addr", "replace", homeDNSServiceIP+"/32", "dev", "lo").CombinedOutput(); err != nil {
+		return fmt.Errorf("assign full-home DNS address: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func removeHomeDNSServiceAddress() error {
+	return exec.Command("ip", "addr", "del", homeDNSServiceIP+"/32", "dev", "lo").Run()
 }
 
 func releaseHomeDNSProxy() {
