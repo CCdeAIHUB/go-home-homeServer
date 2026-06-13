@@ -22,6 +22,7 @@ import (
 const homeTunPacketOffset = 10
 const homeDNSServiceIP = "100.64.77.1"
 const homeDNSProxyPort = "1053"
+const homeLinkLocalIPPrefix = "100.64.78."
 
 type homeLink struct {
 	device     tun.Device
@@ -107,8 +108,13 @@ func (l *homeLink) readLoop(ctx context.Context, send func([]byte) error) {
 }
 
 func configureHomeLink(name, clientIP string) error {
+	localIP, err := homeLinkLocalIP(clientIP)
+	if err != nil {
+		return err
+	}
 	commands := [][]string{
 		{"ip", "link", "set", "dev", name, "mtu", fmt.Sprintf("%d", tunnelMTU), "up"},
+		{"ip", "addr", "replace", localIP + "/32", "dev", name},
 		{"ip", "route", "replace", clientIP + "/32", "dev", name},
 		{"sysctl", "-w", "net.ipv4.ip_forward=1"},
 	}
@@ -118,6 +124,18 @@ func configureHomeLink(name, clientIP string) error {
 		}
 	}
 	return nil
+}
+
+func homeLinkLocalIP(clientIP string) (string, error) {
+	parsed := net.ParseIP(clientIP).To4()
+	if parsed == nil {
+		return "", fmt.Errorf("invalid client IPv4 address %q", clientIP)
+	}
+	host := int(parsed[3])
+	if host == 0 {
+		host = 254
+	}
+	return homeLinkLocalIPPrefix + strconv.Itoa(host), nil
 }
 
 func allowHomeLinkFirewall(name, clientIP, lanIface string) error {
