@@ -21,6 +21,7 @@ import (
 
 const homeTunPacketOffset = 10
 const homeDNSServiceIP = "100.64.77.1"
+const homeDNSProxyPort = "1053"
 
 type homeLink struct {
 	device     tun.Device
@@ -165,8 +166,8 @@ func captureHomeLinkDNS(name string) error {
 		return nil
 	}
 	rules := []string{
-		"insert rule inet fw4 dstnat iifname " + strconv.Quote(name) + " udp dport 53 dnat ip to " + homeDNSServiceIP + ":53 comment " + nftComment(name, "dns-capture"),
-		"insert rule inet fw4 dstnat iifname " + strconv.Quote(name) + " tcp dport 53 dnat ip to " + homeDNSServiceIP + ":53 comment " + nftComment(name, "dns-capture"),
+		"insert rule inet fw4 dstnat iifname " + strconv.Quote(name) + " udp dport 53 dnat ip to " + homeDNSServiceIP + ":" + homeDNSProxyPort + " comment " + nftComment(name, "dns-capture"),
+		"insert rule inet fw4 dstnat iifname " + strconv.Quote(name) + " tcp dport 53 dnat ip to " + homeDNSServiceIP + ":" + homeDNSProxyPort + " comment " + nftComment(name, "dns-capture"),
 	}
 	for _, rule := range rules {
 		if err := applyNFTRule(rule); err != nil {
@@ -262,12 +263,12 @@ func startHomeDNSProxy() (func(), error) {
 		cancel()
 		return nil, err
 	}
-	udpConn, err := net.ListenPacket("udp", net.JoinHostPort(homeDNSServiceIP, "53"))
+	udpConn, err := net.ListenPacket("udp", net.JoinHostPort(homeDNSServiceIP, homeDNSProxyPort))
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("start full-home DNS UDP proxy: %w", err)
 	}
-	tcpLn, err := net.Listen("tcp", net.JoinHostPort(homeDNSServiceIP, "53"))
+	tcpLn, err := net.Listen("tcp", net.JoinHostPort(homeDNSServiceIP, homeDNSProxyPort))
 	if err != nil {
 		_ = udpConn.Close()
 		cancel()
@@ -288,7 +289,7 @@ func startHomeDNSProxy() (func(), error) {
 	}
 	go serveHomeDNSUDP(ctx, udpConn)
 	go serveHomeDNSTCP(ctx, tcpLn)
-	log.Printf("full-home DNS proxy listening on %s:53", homeDNSServiceIP)
+	log.Printf("full-home DNS proxy listening on %s:%s", homeDNSServiceIP, homeDNSProxyPort)
 	return releaseHomeDNSProxy, nil
 }
 
