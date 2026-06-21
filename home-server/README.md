@@ -1,52 +1,61 @@
-# 家庭服务器
+# Home Server Binary
 
-家庭服务器运行在家庭局域网中，负责连接公网服务器、参与 UDP 直连打洞、创建家庭侧虚拟链路，并把加密隧道中的 IPv4 数据转发到家庭局域网。
+This directory contains the Go Home home-side server.
 
-- WebSocket 鉴权与重连。
-- LAN 网段自动检测与上报。
-- UDP 监听入口。
-- P2P 打洞信令事件接收、UDP probe 与直连握手。
-- SM2 会话密钥解封与 SM4 加密隧道 ready/ping/pong 帧。
-- 同端口 UPnP UDP 映射尝试；失败时继续纯直连打洞，不引入中继。
+The home server runs inside the home LAN, connects to the public server over WebSocket, performs UDP hole punching, and forwards encrypted tunnel traffic to LAN devices.
 
-启动：
+## Run From Source
 
-```powershell
-go run ./cmd/home-server -server ws://127.0.0.1:8080/ws -auth-code GOHOME-CHANGE-ME
+```bash
+go run ./cmd/home-server \
+  -server ws://YOUR_PUBLIC_SERVER:8080/ws \
+  -auth-code-file /path/to/auth-code \
+  -lan-cidr 192.168.1.0/24 \
+  -lan-interface br-lan
 ```
 
-在路由器类系统上，若自动探测会先命中 WAN 或上游接口，可以显式指定家庭 LAN：
+Use `-auth-code-file` instead of `-auth-code` in production so the authorization code is not visible in process arguments.
 
-```powershell
-go run ./cmd/home-server -server ws://your-server.example.com:8080/ws -auth-code GOHOME-CHANGE-ME -lan-cidr 192.168.3.0/24 -lan-interface br-lan
-```
+## Production Install
 
-在服务脚本中建议将授权码写入权限受限的文件，并使用 `-auth-code-file` 读取，避免把授权码暴露在进程参数里。
+Use the repository-level scripts:
 
-家庭路由器支持 UPnP 时默认会尝试把 `-udp-port` 映射到相同外部 UDP 端口。受限网络或不希望自动映射时可用 `-upnp=false` 关闭。
+- OpenWrt/procd: `scripts/install-openwrt.sh`
+- Linux/systemd: `scripts/install-systemd.sh`
 
-## 部署方式
+## Common Flags
 
-### OpenWrt / procd
+| Flag | Purpose |
+| --- | --- |
+| `-server` | Public server WebSocket URL |
+| `-auth-code` | Authorization code, useful for local testing only |
+| `-auth-code-file` | File containing the authorization code |
+| `-udp-port` | Local UDP port, default `47777` |
+| `-udp-sockets` | UDP socket count for hole punching |
+| `-upnp` | Try UPnP same-port UDP mapping |
+| `-nat-pmp` | Try NAT-PMP mapping |
+| `-lan-cidr` | Home LAN CIDR |
+| `-lan-interface` | Home LAN interface, often `br-lan` on OpenWrt |
 
-```sh
-GO_HOME_HOME_SERVER_BINARY_URL="https://example.com/go-home-homeserver" \
-GO_HOME_SERVER_WS="ws://YOUR_PUBLIC_SERVER:8080/ws" \
-GO_HOME_AUTH_CODE="YOUR_AUTH_CODE" \
-GO_HOME_LAN_CIDR="192.168.3.0/24" \
-GO_HOME_LAN_INTERFACE="br-lan" \
-sh scripts/install-openwrt.sh
-```
+## Common Errors
 
-### Linux systemd
+Home server is offline in the web console:
 
-```sh
-sudo GO_HOME_HOME_SERVER_BINARY_URL="https://example.com/go-home-homeserver" \
-  GO_HOME_SERVER_WS="ws://YOUR_PUBLIC_SERVER:8080/ws" \
-  GO_HOME_AUTH_CODE="YOUR_AUTH_CODE" \
-  GO_HOME_LAN_CIDR="192.168.3.0/24" \
-  GO_HOME_LAN_INTERFACE="br-lan" \
-  sh scripts/install-systemd.sh
-```
+- Confirm the public server URL ends with `/ws`.
+- Confirm the authorization code is correct.
+- Check `logread -f` on OpenWrt or `journalctl -u go-home-homeserver -f` on Linux.
 
-若未设置 `GO_HOME_HOME_SERVER_BINARY_URL`，脚本会优先使用当前目录中的 `./go-home-homeserver`，其次兼容 CI 旧产物名 `./go-home-server`。
+Tunnel handshake times out:
+
+- Confirm the public server UDP port is open.
+- Confirm outbound UDP is allowed from the home network.
+- Confirm only one home server is bound to the target family.
+
+LAN device access fails:
+
+- Confirm `-lan-cidr` matches the real home subnet.
+- Confirm `-lan-interface` is the LAN bridge/interface, not the WAN interface.
+
+## Security
+
+Do not commit real authorization codes, SSH credentials, private keys, or personal server IP addresses.
