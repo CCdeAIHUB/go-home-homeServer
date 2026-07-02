@@ -23,9 +23,11 @@ The Windows app uses WinUI 3 for the interface and starts the Go home-server cor
 - Public server connection page.
 - Authorization-code login flow.
 - Loading state while connecting.
+- Wintun home-side virtual adapter setup.
+- Windows IPv4 forwarding and Windows NetNat setup.
 - Statistics page with total traffic, connected client count, client IP, and per-client traffic.
 
-The production LAN forwarding path is still Linux/OpenWrt-oriented. Windows builds are useful for home-server registration and statistics, but they do not yet replace the Linux/OpenWrt deployment for full TUN, DHCP proxy, ProxyARP, and LAN routing behavior.
+Windows uses Wintun + Windows NetNat instead of Linux ProxyARP/nftables. The app requests administrator privileges because adapter, forwarding, and NAT setup require elevated permissions.
 
 GitHub Actions uploads the Windows artifact as `go-home-home-server-windows-x64`.
 

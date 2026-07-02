@@ -10,14 +10,17 @@ The Windows app can:
 
 - Connect the Go home-server core to the public server.
 - Send the authorization code and register as a home-server device.
+- Create a Wintun home-side virtual adapter.
+- Enable Windows IPv4 forwarding and Windows NetNat for tunnel traffic.
+- Translate the client's real home-LAN IP to an internal `100.64.78.0/24` address at the Windows TUN boundary.
 - Display connection state.
 - Display total uploaded/downloaded tunnel traffic.
 - Display connected client count, client device ID, client IP, and per-client traffic.
 
 Important limitation:
 
-- The existing full LAN forwarding path still targets Linux/OpenWrt. Windows builds currently do not provide the Linux TUN, DHCP proxy, ProxyARP, nftables, and LAN routing behavior used by the production home-server deployment.
-- For production "home LAN gateway" usage, prefer OpenWrt/iStoreOS/Linux deployment until the Windows network driver path is implemented.
+- Windows uses Wintun + Windows NetNat instead of Linux ProxyARP/nftables.
+- Run the app as administrator; otherwise adapter, forwarding, and NAT setup will fail.
 
 ## Build
 
@@ -61,6 +64,8 @@ Run:
 5. Click **连接**.
 6. After the Go core starts, the app switches to the statistics page.
 
+The app manifest requests administrator privileges because Windows network setup requires it.
+
 ## Common Errors
 
 The app says the Go core is missing:
@@ -76,7 +81,8 @@ Authentication fails:
 No client statistics are shown:
 
 - Statistics appear after clients establish UDP sessions.
-- The Windows build can register and expose statistics, but full LAN forwarding remains Linux/OpenWrt-oriented.
+- Confirm the app was started as administrator.
+- Confirm Windows Defender Firewall or other security software allows the generated Wintun adapter and the Go core process.
 
 Build fails with Windows App SDK PRI or packaging task errors:
 

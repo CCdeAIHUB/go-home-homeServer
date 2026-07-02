@@ -10,7 +10,7 @@ import (
 
 func EnableProxyARP(ctx context.Context, iface, ip string) error {
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("proxy ARP requires Linux")
+		return nil
 	}
 	if iface == "" {
 		return fmt.Errorf("LAN interface is required for proxy ARP")
@@ -29,7 +29,7 @@ func EnableProxyARP(ctx context.Context, iface, ip string) error {
 
 func DisableProxyARP(ctx context.Context, iface, ip string) error {
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("proxy ARP requires Linux")
+		return nil
 	}
 	if iface == "" {
 		return fmt.Errorf("LAN interface is required for proxy ARP")
