@@ -90,6 +90,21 @@ type trafficTotals struct {
 	Down uint64
 }
 
+type clientStat struct {
+	DeviceID string `json:"device_id"`
+	IP       string `json:"ip"`
+	Up       uint64 `json:"up"`
+	Down     uint64 `json:"down"`
+	LastSeen string `json:"last_seen"`
+}
+
+type serviceStats struct {
+	ConnectedClients int          `json:"connected_clients"`
+	Up               uint64       `json:"up"`
+	Down             uint64       `json:"down"`
+	Clients          []clientStat `json:"clients"`
+}
+
 // packetLink 是虚拟网卡链路的接口，用于读写 IP 数据包。
 type packetLink interface {
 	// WritePacket 将 IP 数据包写入虚拟网卡。
@@ -897,6 +912,36 @@ func (s *udpService) trafficDelta() trafficTotals {
 		session.mu.Unlock()
 	}
 	return delta
+}
+
+func (s *udpService) statsSnapshot() serviceStats {
+	s.mu.RLock()
+	sessions := make([]*udpSession, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		sessions = append(sessions, session)
+	}
+	s.mu.RUnlock()
+
+	stats := serviceStats{ConnectedClients: len(sessions), Clients: make([]clientStat, 0, len(sessions))}
+	for _, session := range sessions {
+		session.mu.Lock()
+		ip := ""
+		if session.lease != nil {
+			ip = session.lease.IP
+		}
+		stat := clientStat{
+			DeviceID: session.offer.Client.DeviceID,
+			IP:       ip,
+			Up:       session.up,
+			Down:     session.down,
+			LastSeen: session.seenAt.Format(time.RFC3339),
+		}
+		stats.Up += session.up
+		stats.Down += session.down
+		session.mu.Unlock()
+		stats.Clients = append(stats.Clients, stat)
+	}
+	return stats
 }
 
 // counterDelta 计算计数器增量，处理计数器重置的情况。

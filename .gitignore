@@ -1,5 +1,6 @@
 bin/
 dist/
+obj/
 node_modules/
 .env
 *.db

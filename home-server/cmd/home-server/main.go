@@ -227,12 +227,22 @@ func run(ctx context.Context, serverURL, authCode, deviceID, publicKey string, u
 			if err := writeJSON(ping); err != nil {
 				return err
 			}
-			if err := reportTraffic(writeJSON, udp.trafficDelta()); err != nil {
+			delta := udp.trafficDelta()
+			if err := reportTraffic(writeJSON, delta); err != nil {
 				return err
 			}
+			logUIStats(udp.statsSnapshot())
 			_ = reportLAN(writeJSON, lanCIDR, lanInterface)
 		}
 	}
+}
+
+func logUIStats(stats serviceStats) {
+	payload, err := json.Marshal(stats)
+	if err != nil {
+		return
+	}
+	log.Printf("ui_stats %s", payload)
 }
 
 // reportLAN 向服务器上报家庭局域网网段信息。
@@ -429,7 +439,7 @@ func registerUDPLoop(ctx context.Context, serverURL string, serverUDPPorts []int
 			packet, err := tunnel.MarshalRegister(tunnel.Register{
 				DeviceID: deviceID,
 				Token:    token,
-				UDPPort: localUDPPort,
+				UDPPort:  localUDPPort,
 			})
 			if err != nil {
 				log.Printf("marshal register packet: %v", err)

@@ -14,6 +14,21 @@ It does not relay traffic through the public server.
 
 One family should bind only one home server.
 
+## Windows Desktop Home Server
+
+This repository also contains a Windows desktop manager in `home-server-windows`.
+
+The Windows app uses WinUI 3 for the interface and starts the Go home-server core in the background. It provides:
+
+- Public server connection page.
+- Authorization-code login flow.
+- Loading state while connecting.
+- Statistics page with total traffic, connected client count, client IP, and per-client traffic.
+
+The production LAN forwarding path is still Linux/OpenWrt-oriented. Windows builds are useful for home-server registration and statistics, but they do not yet replace the Linux/OpenWrt deployment for full TUN, DHCP proxy, ProxyARP, and LAN routing behavior.
+
+GitHub Actions uploads the Windows artifact as `go-home-home-server-windows-x64`.
+
 ## Recommended OpenWrt Install
 
 Download the latest `go-home-server-linux-amd64` or `go-home-server-linux-arm64` artifact from this repository Actions page. Put the binary on the router, then run:
@@ -158,6 +173,7 @@ Every push to `main` runs GitHub Actions. The workflow:
 
 - runs Go tests on Linux and macOS;
 - builds Linux amd64 and arm64 binaries;
+- builds the Windows WinUI 3 home-server manager for x64;
 - publishes tagged releases for `v*` tags.
 
 ## Security Notes
