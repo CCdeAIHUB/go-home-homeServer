@@ -72,7 +72,15 @@ jobs:
         working-directory: home-server
       - name: Publish WinUI3 home-server app
         shell: pwsh
-        run: dotnet publish .\home-server-windows\GoHome.HomeServer.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o .\artifacts\go-home-home-server-windows
+        run: |
+          msbuild .\home-server-windows\GoHome.HomeServer.Windows.csproj `
+            /restore `
+            /t:Publish `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:RuntimeIdentifier=win-x64 `
+            /p:SelfContained=true `
+            /p:PublishDir="$PWD\artifacts\go-home-home-server-windows\"
       - name: Upload Windows home-server app
         uses: actions/upload-artifact@v4
         with:
